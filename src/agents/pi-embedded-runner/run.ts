@@ -768,11 +768,11 @@ export async function runEmbeddedPiAgent(
             // If billing failure, switch to free model so user can continue
             if (billingFailure) {
               try {
-                execSync("openclaw models set openrouter/free", {
+                execSync("openclaw models set openrouter/openrouter/auto", {
                   stdio: "pipe",
                   timeout: 10000,
                 });
-                log.info("Switched to free model due to billing error: openrouter/free");
+                log.info("Switched to free model due to billing error: openrouter/auto");
               } catch (e) {
                 log.error(`Failed to switch to free model: ${e instanceof Error ? e.message : String(e)}`);
               }
