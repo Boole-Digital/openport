@@ -1,0 +1,13 @@
+{
+  "name": "openclaw-telemetry-webhook",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.ts",
+  "description": "Export telemetry events to an HTTP webhook endpoint",
+  "keywords": ["openclaw", "telemetry", "webhook", "analytics"],
+  "license": "MIT",
+  "dependencies": {},
+  "peerDependencies": {
+    "openclaw": "*"
+  }
+}

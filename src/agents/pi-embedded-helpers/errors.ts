@@ -4,7 +4,11 @@ import type { FailoverReason } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 
 export const BILLING_ERROR_USER_MESSAGE =
-  "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+  "⚠️ You're out of credits!\n\n" +
+  "To continue using premium AI models, either:\n" +
+  "• Top up with a booster pack: https://launcher.portara.xyz/billing\n" +
+  "• End your free trial to unlock your full credits\n\n" +
+  "Switching you to free AI models so you can continue...";
 
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {

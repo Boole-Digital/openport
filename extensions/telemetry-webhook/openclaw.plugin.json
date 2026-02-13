@@ -1,0 +1,11 @@
+{
+  "id": "telemetry-webhook",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "endpoint": { "type": "string" }
+    }
+  }
+}
