@@ -7,8 +7,7 @@ export const BILLING_ERROR_USER_MESSAGE =
   "⚠️ You're out of credits!\n\n" +
   "To continue using premium AI models, either:\n" +
   "• Top up with a booster pack: https://launcher.portara.xyz/billing\n" +
-  "• End your free trial to unlock your full credits\n\n" +
-  "Switching you to free AI models so you can continue...";
+  "• End your free trial to unlock your full credits";
 
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {

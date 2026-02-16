@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
@@ -765,18 +764,7 @@ export async function runEmbeddedPiAgent(
               continue;
             }
 
-            // If billing failure, switch to free model so user can continue
-            if (billingFailure) {
-              try {
-                execSync("openclaw models set openrouter/openrouter/auto", {
-                  stdio: "pipe",
-                  timeout: 10000,
-                });
-                log.info("Switched to free model due to billing error: openrouter/auto");
-              } catch (e) {
-                log.error(`Failed to switch to free model: ${e instanceof Error ? e.message : String(e)}`);
-              }
-            }
+            // Billing failure: keep current model, user message will direct them to billing
 
             if (fallbackConfigured) {
               // Prefer formatted error message (user-friendly) over raw errorMessage
