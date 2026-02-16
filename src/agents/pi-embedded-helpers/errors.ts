@@ -3,15 +3,24 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { FailoverReason } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 
+export const BILLING_ERROR_USER_MESSAGE =
+  "⚠️ You're out of API provider credits!\n\n" +
+  "To continue using premium AI models, either:\n" +
+  "• Top up with a booster pack: https://launcher.portara.xyz/billing\n" +
+  "• End your free trial to unlock your full credits";
+
 export function formatBillingErrorMessage(provider?: string): string {
   const providerName = provider?.trim();
   if (providerName) {
-    return `⚠️ ${providerName} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
+    return (
+      `⚠️ You're out of ${providerName} credits!\n\n` +
+      "To continue using premium AI models, either:\n" +
+      "• Top up with a booster pack: https://launcher.portara.xyz/billing\n" +
+      "• End your free trial to unlock your full credits"
+    );
   }
-  return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+  return BILLING_ERROR_USER_MESSAGE;
 }
-
-export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =
