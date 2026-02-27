@@ -10,12 +10,12 @@ const log = createSubsystemLogger("errors");
 export function formatBillingErrorMessage(provider?: string, model?: string): string {
   const providerName = provider?.trim();
   const modelName = model?.trim();
-  const providerLabel =
-    providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
-  if (providerLabel) {
-    return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
-  }
-  return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+  return (
+    `⚠️ You're out of ${providerName} credits!\n\n` +
+    "To continue using premium AI models, either:\n" +
+    "• Top up with a booster pack: https://launcher.portara.xyz/billing\n" +
+    "• End your free trial to unlock your full credits"
+  );
 }
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
