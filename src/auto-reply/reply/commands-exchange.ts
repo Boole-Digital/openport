@@ -195,7 +195,12 @@ function buildPositionsText(results: StateResult[]): string {
     if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
     if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
     const open = r.positions.filter((p) => p.size > 0);
-    if (open.length === 0) { lines.push(`${r.label}  ·  no open positions`); continue; }
+    if (open.length === 0) {
+      lines.push(`**${r.label}**`);
+      lines.push("  no open positions");
+      lines.push("");
+      continue;
+    }
     lines.push(`**${r.label}**`);
     for (let i = 0; i < open.length; i++) {
       const p = open[i];
@@ -220,7 +225,12 @@ function buildOrdersText(results: OrderResult[]): string {
   for (const r of results) {
     if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
     if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
-    if (r.orders.length === 0) { lines.push(`${r.label}  ·  no open orders`); continue; }
+    if (r.orders.length === 0) {
+      lines.push(`**${r.label}**`);
+      lines.push("  no open orders");
+      lines.push("");
+      continue;
+    }
     lines.push(`**${r.label}**`);
     for (let i = 0; i < r.orders.length; i++) {
       if (i > 0) lines.push("");
