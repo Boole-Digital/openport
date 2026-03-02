@@ -222,7 +222,9 @@ function buildOrdersText(results: OrderResult[]): string {
     if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
     if (r.orders.length === 0) { lines.push(`${r.label}  ·  no open orders`); continue; }
     lines.push(`**${r.label}**`);
-    for (const o of r.orders) {
+    for (let i = 0; i < r.orders.length; i++) {
+      if (i > 0) lines.push("");
+      const o = r.orders[i];
       const side = o.side === "buy" ? "BUY " : "SELL";
       const qty = o.filled > 0 ? `${formatAmount(o.filled)}/${formatAmount(o.size)} filled` : formatAmount(o.size);
       lines.push(`  ${side}  ${o.market}  ${qty}  @ $${formatPrice(o.price)}  ≈ $${formatUsd(o.size * o.price)}`);
