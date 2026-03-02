@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 const EXCHANGES = [
   { id: "hyperliquid", label: "Hyperliquid" },
   { id: "extended", label: "Extended" },
-  { id: "xyz", label: "trade.xyz" },
+  { id: "xyz", label: "trade\u200b.xyz" },
   { id: "cash", label: "Dreamcash" },
 ] as const;
 
@@ -72,7 +72,7 @@ const ti = new TradingInterface();
 const EXCHANGES = [
   { id: 'hyperliquid', label: 'Hyperliquid' },
   { id: 'extended', label: 'Extended' },
-  { id: 'xyz', label: 'trade.xyz' },
+  { id: 'xyz', label: 'trade\u200b.xyz' },
   { id: 'cash', label: 'Dreamcash' },
 ];
 
@@ -161,7 +161,7 @@ function buildBalancesText(results: StateResult[]): string {
     if (hl.configured && !("error" in hl) && xyz.configured && !("error" in xyz)) {
       combined[hlIdx] = {
         ...hl,
-        label: "Hyperliquid / trade.xyz",
+        label: "Hyperliquid / trade\u200b.xyz",
         balances: { ...hl.balances, USD: (hl.balances.USD ?? 0) + (xyz.balances.USD ?? 0) },
       };
       merged[xyzIdx] = true;
