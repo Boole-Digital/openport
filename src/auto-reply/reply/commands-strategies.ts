@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { open } from "node:fs/promises";
 import { promisify } from "node:util";
-import type { TelegramInlineButtons } from "../../telegram/button-types.js";
+import type { TelegramInlineButton, TelegramInlineButtons } from "../../telegram/button-types.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -93,42 +93,49 @@ function formatProcess(proc: Pm2Process): string {
   return `${emoji} ${proc.name}\n   ${statusLine}`;
 }
 
-// Telegram callback_data limit: 64 bytes
+// Short /ms prefix keeps callback_data within Telegram's 64-byte limit.
+// e.g. "/ms select strategy:hyperliquid:btc_market_maker_hyperliquid" = 61 bytes ✓
+const CB_PREFIX = "/ms";
+
 function callbackData(action: string, name: string): string {
-  const raw = `/strategies ${action} ${name}`;
+  const raw = `${CB_PREFIX} ${action} ${name}`;
   return Buffer.byteLength(raw, "utf8") <= 64 ? raw : raw.slice(0, 63);
 }
 
-// Short name for button labels
-function shortName(name: string): string {
-  return name.length > 12 ? `${name.slice(0, 11)}…` : name;
+// Overview: one button per strategy, status emoji tells you running/stopped at a glance.
+function buildOverviewButtons(processes: Pm2Process[]): TelegramInlineButtons {
+  return processes.map((proc) => {
+    const emoji = statusEmoji(proc.pm2_env.status);
+    const label = proc.name.length > 28 ? `${proc.name.slice(0, 27)}…` : proc.name;
+    return [{ text: `${emoji}  ${label}`, callback_data: callbackData("select", proc.name) }];
+  });
 }
 
-// One row per strategy: emoji-only actions so name fits cleanly.
-// callback_data carries the full command, so each click routes through the normal pipeline.
-function buildStrategyButtons(processes: Pm2Process[]): TelegramInlineButtons {
-  return processes.map((proc) => {
-    const { status } = proc.pm2_env;
-    const n = shortName(proc.name);
-    const logsBtn = { text: `📋 ${n}`, callback_data: callbackData("logs", proc.name) };
+// Detail: action row (stop/start/restart/logs) + back button on its own row.
+function buildDetailButtons(proc: Pm2Process): TelegramInlineButtons {
+  const { status } = proc.pm2_env;
+  const logsBtn: TelegramInlineButton = { text: "📋  Logs", callback_data: callbackData("logs", proc.name) };
+  const backBtn: TelegramInlineButton = { text: "‹  All strategies", callback_data: "/mystrategies" };
 
-    if (status === "online") {
-      return [
-        { text: `⏹ ${n}`, callback_data: callbackData("stop", proc.name) },
-        { text: `↺ ${n}`, callback_data: callbackData("restart", proc.name) },
-        logsBtn,
-      ];
-    }
-    if (status === "stopped" || status === "errored") {
-      return [
-        { text: `▶ ${n}`, callback_data: callbackData("start", proc.name) },
-        { text: `↺ ${n}`, callback_data: callbackData("restart", proc.name) },
-        logsBtn,
-      ];
-    }
+  let actionRow: TelegramInlineButton[];
+  if (status === "online") {
+    actionRow = [
+      { text: "⏹  Stop", callback_data: callbackData("stop", proc.name) },
+      { text: "↺  Restart", callback_data: callbackData("restart", proc.name) },
+      logsBtn,
+    ];
+  } else if (status === "stopped" || status === "errored") {
+    actionRow = [
+      { text: "▶  Start", callback_data: callbackData("start", proc.name) },
+      { text: "↺  Restart", callback_data: callbackData("restart", proc.name) },
+      logsBtn,
+    ];
+  } else {
     // Transitioning: only safe actions
-    return [{ text: `⏹ ${n}`, callback_data: callbackData("stop", proc.name) }, logsBtn];
-  });
+    actionRow = [{ text: "⏹  Stop", callback_data: callbackData("stop", proc.name) }, logsBtn];
+  }
+
+  return [actionRow, [backBtn]];
 }
 
 async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: string }> {
@@ -177,7 +184,7 @@ async function tailFile(filePath: string, maxLines: number): Promise<string[]> {
 
 function buildListReply(processes: Pm2Process[], channel: string): ReplyPayload {
   if (processes.length === 0) {
-    return { text: "No strategies running." };
+    return { text: "No strategies found." };
   }
 
   const sorted = [...processes].sort(
@@ -198,17 +205,28 @@ function buildListReply(processes: Pm2Process[], channel: string): ReplyPayload 
   }
   if (summaryParts.length === 0) summaryParts.push(`${processes.length} total`);
 
-  const n = processes.length;
-  const header = `Strategies — ${summaryParts.join(" · ")}  (${n} total)`;
-  const text = `${header}\n\n${sorted.map(formatProcess).join("\n\n")}`;
+  const text = `My Strategies  ·  ${summaryParts.join("  ·  ")}\nTap a strategy to view details and controls.`;
 
-  // Telegram: button grid below the list — one row per strategy.
-  // ⏹/▶/↺ control the process; 📋 fetches its logs.
-  // Buttons use callback_data = the full command string routed as a synthetic message.
   if (channel === "telegram") {
-    return { text, channelData: { telegram: { buttons: buildStrategyButtons(sorted) } } };
+    return { text, channelData: { telegram: { buttons: buildOverviewButtons(sorted) } } };
   }
 
+  // Non-Telegram: show the full text list instead
+  return { text: `${text}\n\n${sorted.map(formatProcess).join("\n\n")}` };
+}
+
+async function buildSelectReply(name: string, channel: string): Promise<ReplyPayload> {
+  const { processes, error } = await fetchProcesses();
+  if (error) return { text: error };
+
+  const proc = processes.find((p) => p.name === name);
+  if (!proc) return { text: `Strategy "${name}" not found.` };
+
+  const text = formatProcess(proc);
+
+  if (channel === "telegram") {
+    return { text, channelData: { telegram: { buttons: buildDetailButtons(proc) } } };
+  }
   return { text };
 }
 
@@ -256,6 +274,7 @@ async function buildLogsReply(name: string, maxLines: number): Promise<ReplyPayl
 async function controlStrategy(
   action: "start" | "stop" | "restart",
   name: string,
+  channel: string,
 ): Promise<ReplyPayload> {
   try {
     await execFileAsync("pm2", [action, name], { timeout: 10000 });
@@ -265,25 +284,37 @@ async function controlStrategy(
     return { text: `Failed to ${action} "${name}": ${error.message}` };
   }
 
-  // Return the updated status line so the user sees the result immediately
-  const { processes } = await fetchProcesses();
-  const proc = processes.find((p) => p.name === name);
-  const verb = action === "start" ? "Started" : action === "stop" ? "Stopped" : "Restarted";
-  return { text: proc ? `${verb} — ${formatProcess(proc)}` : `${verb} "${name}".` };
+  // Return the updated detail view so the user sees the result immediately with fresh buttons
+  return buildSelectReply(name, channel);
 }
 
-export const handleStrategiesCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleMyStrategiesCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
 
   const body = params.command.commandBodyNormalized;
-  if (!body.startsWith("/strategies")) return null;
 
-  const unauthorized = rejectUnauthorizedCommand(params, "/strategies");
+  // Handle user-facing /mystrategies and the short /ms callback prefix
+  let rest: string;
+  if (body.startsWith("/mystrategies")) {
+    rest = body.slice("/mystrategies".length).trim();
+  } else if (body.startsWith("/ms ") || body === "/ms") {
+    rest = body.slice("/ms".length).trim();
+  } else {
+    return null;
+  }
+
+  const unauthorized = rejectUnauthorizedCommand(params, "/mystrategies");
   if (unauthorized) return unauthorized;
 
-  const rest = body.slice("/strategies".length).trim();
+  const channel = params.command.channel;
 
-  // /strategies logs <name> [<lines>]
+  // select <name> — show detail view for one strategy
+  const selectMatch = rest.match(/^select\s+(\S.*)$/);
+  if (selectMatch) {
+    return { shouldContinue: false, reply: await buildSelectReply(selectMatch[1].trim(), channel) };
+  }
+
+  // logs <name> [lines]
   const logsMatch = rest.match(/^logs\s+(\S+)(?:\s+(\d+))?$/);
   if (logsMatch) {
     const name = logsMatch[1];
@@ -293,23 +324,23 @@ export const handleStrategiesCommand: CommandHandler = async (params, allowTextC
     return { shouldContinue: false, reply: await buildLogsReply(name, lines) };
   }
 
-  // /strategies start|stop|restart <name>
+  // start|stop|restart <name>
   const controlMatch = rest.match(/^(start|stop|restart)\s+(\S+)$/);
   if (controlMatch) {
     const action = controlMatch[1] as "start" | "stop" | "restart";
     const name = controlMatch[2];
-    return { shouldContinue: false, reply: await controlStrategy(action, name) };
+    return { shouldContinue: false, reply: await controlStrategy(action, name, channel) };
   }
 
-  // /strategies — list all
+  // /mystrategies — list all
   if (!rest) {
     const { processes, error } = await fetchProcesses();
     if (error) return { shouldContinue: false, reply: { text: error } };
-    return { shouldContinue: false, reply: buildListReply(processes, params.command.channel) };
+    return { shouldContinue: false, reply: buildListReply(processes, channel) };
   }
 
   return {
     shouldContinue: false,
-    reply: { text: "Usage: /strategies  ·  /strategies logs <name> [lines]  ·  /strategies start|stop|restart <name>" },
+    reply: { text: "Usage: /mystrategies  ·  /mystrategies logs <name> [lines]  ·  /mystrategies start|stop|restart <name>" },
   };
 };
