@@ -7,6 +7,7 @@ import type { TelegramInlineButtons } from "../../telegram/button-types.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { isRoutableChannel, routeReply } from "./route-reply.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -203,7 +204,7 @@ function buildOrdersText(results: OrderResult[]): string {
     for (const o of r.orders) {
       const side = o.side === "buy" ? "BUY " : "SELL";
       const qty = o.filled > 0 ? `${formatAmount(o.filled)}/${formatAmount(o.size)} filled` : formatAmount(o.size);
-      lines.push(`  ${side}  ${o.market}  ${qty}  @ ${formatPrice(o.price)}  ≈ $${formatUsd(o.size * o.price)}`);
+      lines.push(`  ${side}  ${o.market}  ${qty}  @ $${formatPrice(o.price)}  ≈ $${formatUsd(o.size * o.price)}`);
     }
     lines.push("");
   }
@@ -253,8 +254,30 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
   if (unauthorized) return unauthorized;
 
   const channel = params.command.channel;
-  const editMessageId = params.ctx.TelegramEditMessageId;
   const v3Dir = path.join(params.workspaceDir, "portara-agent", "v3");
+
+  // Send interim "thinking" message on fresh invocations (not refreshes).
+  // For Telegram, capture the messageId so we can edit it in-place with the result.
+  let editMessageId = params.ctx.TelegramEditMessageId;
+  if (!editMessageId) {
+    const originChannel = params.ctx.OriginatingChannel;
+    const originTo = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
+    if (originChannel && originTo && isRoutableChannel(originChannel)) {
+      const interim = await routeReply({
+        payload: { text: "⏳" },
+        channel: originChannel,
+        to: originTo,
+        sessionKey: params.sessionKey,
+        accountId: params.ctx.AccountId,
+        threadId: params.ctx.MessageThreadId,
+        cfg: params.cfg,
+        mirror: false,
+      });
+      if (channel === "telegram" && interim.messageId) {
+        editMessageId = interim.messageId;
+      }
+    }
+  }
 
   if (isOrders) {
     const { results, error } = await fetchData<OrderResult>(v3Dir, "orders");
