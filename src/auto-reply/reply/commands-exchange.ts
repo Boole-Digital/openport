@@ -180,7 +180,7 @@ function buildBalancesText(results: StateResult[]): string {
       lines.push(`**${r.label}**`);
       lines.push("```");
       for (const [asset, amount] of nonZero) {
-        lines.push(`${asset.padEnd(10)}${formatAmount(amount)}`);
+        lines.push(`${asset.padEnd(10)}$${formatUsd(amount)}`);
       }
       lines.push("```");
     }
