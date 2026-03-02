@@ -209,8 +209,7 @@ function buildPositionsText(results: StateResult[]): string {
       const side = p.side === "long" ? "long " : "short";
       const notional = formatUsd(p.size * p.markPrice);
       const margin = formatUsd((p.size * p.markPrice) / p.leverage);
-      const pnlEmoji = p.unrealizedPnl >= 0 ? "🟢" : "🔴";
-      lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} ($${notional})  ${p.leverage}×  ${pnlEmoji} ${formatPnl(p.unrealizedPnl)}`);
+      lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} ($${notional})  ${p.leverage}×  PNL ${formatPnl(p.unrealizedPnl)}`);
       const details = [`entry $${formatPrice(p.entryPrice)}`, `mark $${formatPrice(p.markPrice)}`, `margin $${margin}`];
       if (p.liquidationPrice > 0) details.push(`liq $${formatPrice(p.liquidationPrice)}`);
       lines.push(`    ${details.join("  ·  ")}`);
