@@ -148,6 +148,11 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /**
+   * Telegram-only: the message_id of the original callback message to edit in place.
+   * Set when the command originated from a Telegram inline button press.
+   */
+  TelegramEditMessageId?: string;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
