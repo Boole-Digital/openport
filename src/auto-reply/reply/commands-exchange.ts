@@ -150,7 +150,8 @@ function buildBalancesText(results: StateResult[]): string {
   for (const r of results) {
     if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
     if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
-    const nonZero = Object.entries(r.balances).filter(([, v]) => v !== 0);
+    // USDT0 is Hyperliquid's on-chain USDT used as Dreamcash margin — always 1:1 with USDC, skip it.
+    const nonZero = Object.entries(r.balances).filter(([k, v]) => v !== 0 && !(r.id === "cash" && k === "USDT0"));
     if (nonZero.length === 0) {
       lines.push(`${r.label}  ·  no balances`);
     } else {
@@ -176,9 +177,13 @@ function buildPositionsText(results: StateResult[]): string {
     lines.push(`**${r.label}**`);
     for (const p of open) {
       const side = p.side === "long" ? "long " : "short";
-      const notional = `$${formatUsd(p.size * p.markPrice)}`;
+      const notional = formatUsd(p.size * p.markPrice);
+      const margin = formatUsd((p.size * p.markPrice) / p.leverage);
       const pnlEmoji = p.unrealizedPnl >= 0 ? "🟢" : "🔴";
-      lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} (${notional})  entry ${formatPrice(p.entryPrice)}  ${pnlEmoji} ${formatPnl(p.unrealizedPnl)}  ${p.leverage}×`);
+      lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} ($${notional})  ${p.leverage}×  ${pnlEmoji} ${formatPnl(p.unrealizedPnl)}`);
+      const details = [`entry ${formatPrice(p.entryPrice)}`, `mark ${formatPrice(p.markPrice)}`, `margin $${margin}`];
+      if (p.liquidationPrice > 0) details.push(`liq ${formatPrice(p.liquidationPrice)}`);
+      lines.push(`    ${details.join("  ·  ")}`);
     }
     lines.push("");
   }
