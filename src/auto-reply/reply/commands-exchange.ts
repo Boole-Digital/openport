@@ -168,8 +168,9 @@ function buildPositionsText(results: StateResult[]): string {
     if (open.length === 0) { lines.push(`${r.label}  ·  no open positions`); continue; }
     lines.push(r.label);
     for (const p of open) {
-      const dir = p.side === "long" ? "▲" : "▼";
-      lines.push(`  ${dir} ${p.market}  ${formatAmount(p.size)} @ ${formatPrice(p.entryPrice)}  ${formatPnl(p.unrealizedPnl)}  ${p.leverage}×`);
+      const side = p.side === "long" ? "long " : "short";
+      const notional = `$${formatAmount(p.size * p.markPrice)}`;
+      lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} (${notional})  entry ${formatPrice(p.entryPrice)}  pnl ${formatPnl(p.unrealizedPnl)}  ${p.leverage}× lev`);
     }
     lines.push("");
   }
@@ -185,8 +186,9 @@ function buildOrdersText(results: OrderResult[]): string {
     lines.push(r.label);
     for (const o of r.orders) {
       const side = o.side === "buy" ? "BUY " : "SELL";
-      const fill = o.filled > 0 ? `  (${formatAmount(o.filled)}/${formatAmount(o.size)} filled)` : "";
-      lines.push(`  ${side}  ${o.market}  ${formatAmount(o.size)} @ ${formatPrice(o.price)}${fill}`);
+      const qty = o.filled > 0 ? `${formatAmount(o.filled)}/${formatAmount(o.size)} filled` : `qty ${formatAmount(o.size)}`;
+      const notional = `$${formatAmount(o.size * o.price)}`;
+      lines.push(`  ${side}  ${o.market}  ${qty}  limit ${formatPrice(o.price)}  (${notional})`);
     }
     lines.push("");
   }
