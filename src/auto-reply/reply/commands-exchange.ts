@@ -30,16 +30,37 @@ type Position = {
   liquidationPrice: number;
 };
 
-type ExchangeResult =
+type Order = {
+  orderId: string;
+  market: string;
+  side: "buy" | "sell";
+  price: number;
+  size: number;
+  filled: number;
+  timestamp: number;
+};
+
+type StateResult =
   | { id: ExchangeId; label: string; configured: false }
   | { id: ExchangeId; label: string; configured: true; error: string }
   | { id: ExchangeId; label: string; configured: true; balances: Record<string, number>; positions: Position[] };
 
+type OrderResult =
+  | { id: ExchangeId; label: string; configured: false }
+  | { id: ExchangeId; label: string; configured: true; error: string }
+  | { id: ExchangeId; label: string; configured: true; orders: Order[] };
+
 // Runs as an ESM temp script (.mjs) so it can import portara-agent's ESM libs.
 // cwd must be v3Dir so Extended SDK WASM resolves correctly.
-function buildRunnerScript(v3Dir: string): string {
+function buildRunnerScript(v3Dir: string, mode: "state" | "orders"): string {
   const tiPath = JSON.stringify(`${v3Dir}/libs/trading-interface.js`);
   const cfgPath = JSON.stringify(`${v3Dir}/libs/config.js`);
+  const fetchBody =
+    mode === "state"
+      ? `    const state = await ti.getExchangeState(id);
+    return { id, label, configured: true, balances: state.balances, positions: state.positions };`
+      : `    const orders = await ti.getOpenOrders(id);
+    return { id, label, configured: true, orders };`;
   return `
 import { TradingInterface } from ${tiPath};
 import { loadConfig } from ${cfgPath};
@@ -60,8 +81,7 @@ const results = await Promise.all(EXCHANGES.map(async ({ id, label }) => {
   }
   try {
     await ti.connectExchange(id, config[id]);
-    const state = await ti.getExchangeState(id);
-    return { id, label, configured: true, balances: state.balances, positions: state.positions };
+${fetchBody}
   } catch (err) {
     return { id, label, configured: true, error: err.message };
   }
@@ -72,10 +92,10 @@ process.stdout.write(JSON.stringify(results));
 `;
 }
 
-async function fetchExchangeData(
+async function fetchData<T>(
   v3Dir: string,
-): Promise<{ results: ExchangeResult[]; error?: string }> {
-  // Verify portara-agent is installed before spinning up a node process
+  mode: "state" | "orders",
+): Promise<{ results: T[]; error?: string }> {
   try {
     await access(v3Dir);
   } catch {
@@ -85,17 +105,16 @@ async function fetchExchangeData(
   const tmpDir = await mkdtemp(path.join(tmpdir(), "portara-ex-"));
   const scriptPath = path.join(tmpDir, "runner.mjs");
   try {
-    await writeFile(scriptPath, buildRunnerScript(v3Dir), "utf8");
+    await writeFile(scriptPath, buildRunnerScript(v3Dir, mode), "utf8");
     const { stdout } = await execFileAsync("node", [scriptPath], {
       timeout: 20000,
       cwd: v3Dir,
     });
-    return { results: JSON.parse(stdout) as ExchangeResult[] };
+    return { results: JSON.parse(stdout) as T[] };
   } catch (err) {
     const error = err as NodeJS.ErrnoException & { killed?: boolean; stderr?: string };
     if (error.code === "ENOENT") return { results: [], error: "Node.js is not installed or not in PATH." };
     if (error.killed) return { results: [], error: "Exchange query timed out after 20s." };
-    // Surface the first meaningful error line from stderr
     const detail = error.stderr?.split("\n").find((l) => l.trim() && !l.startsWith(" ")) ?? error.message;
     return { results: [], error: `Exchange query failed: ${detail}` };
   } finally {
@@ -121,18 +140,11 @@ function formatPnl(pnl: number): string {
   return `${sign}$${Math.abs(pnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function buildBalancesText(results: ExchangeResult[]): string {
+function buildBalancesText(results: StateResult[]): string {
   const lines: string[] = ["My Balances", ""];
-
   for (const r of results) {
-    if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
-      continue;
-    }
-    if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
-      continue;
-    }
+    if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
+    if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
     const nonZero = Object.entries(r.balances).filter(([, v]) => v !== 0);
     if (nonZero.length === 0) {
       lines.push(`${r.label}  ·  no balances`);
@@ -144,36 +156,40 @@ function buildBalancesText(results: ExchangeResult[]): string {
     }
     lines.push("");
   }
-
   return lines.join("\n").trimEnd();
 }
 
-function buildPositionsText(results: ExchangeResult[]): string {
+function buildPositionsText(results: StateResult[]): string {
   const lines: string[] = ["My Positions", ""];
-
   for (const r of results) {
-    if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
-      continue;
-    }
-    if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
-      continue;
-    }
+    if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
+    if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
     const open = r.positions.filter((p) => p.size > 0);
-    if (open.length === 0) {
-      lines.push(`${r.label}  ·  no open positions`);
-      continue;
-    }
+    if (open.length === 0) { lines.push(`${r.label}  ·  no open positions`); continue; }
     lines.push(r.label);
     for (const p of open) {
       const dir = p.side === "long" ? "▲" : "▼";
-      const pnl = formatPnl(p.unrealizedPnl);
-      lines.push(`  ${dir} ${p.market}  ${formatAmount(p.size)} @ ${formatPrice(p.entryPrice)}  ${pnl}  ${p.leverage}×`);
+      lines.push(`  ${dir} ${p.market}  ${formatAmount(p.size)} @ ${formatPrice(p.entryPrice)}  ${formatPnl(p.unrealizedPnl)}  ${p.leverage}×`);
     }
     lines.push("");
   }
+  return lines.join("\n").trimEnd();
+}
 
+function buildOrdersText(results: OrderResult[]): string {
+  const lines: string[] = ["My Open Orders", ""];
+  for (const r of results) {
+    if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
+    if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
+    if (r.orders.length === 0) { lines.push(`${r.label}  ·  no open orders`); continue; }
+    lines.push(r.label);
+    for (const o of r.orders) {
+      const side = o.side === "buy" ? "BUY " : "SELL";
+      const fill = o.filled > 0 ? `  (${formatAmount(o.filled)}/${formatAmount(o.size)} filled)` : "";
+      lines.push(`  ${side}  ${o.market}  ${formatAmount(o.size)} @ ${formatPrice(o.price)}${fill}`);
+    }
+    lines.push("");
+  }
   return lines.join("\n").trimEnd();
 }
 
@@ -212,9 +228,10 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
   const body = params.command.commandBodyNormalized;
   const isBalances = body === "/mybalances" || body.startsWith("/mybalances ");
   const isPositions = body === "/mypositions" || body.startsWith("/mypositions ");
-  if (!isBalances && !isPositions) return null;
+  const isOrders = body === "/myorders" || body.startsWith("/myorders ");
+  if (!isBalances && !isPositions && !isOrders) return null;
 
-  const label = isBalances ? "/mybalances" : "/mypositions";
+  const label = isBalances ? "/mybalances" : isPositions ? "/mypositions" : "/myorders";
   const unauthorized = rejectUnauthorizedCommand(params, label);
   if (unauthorized) return unauthorized;
 
@@ -222,9 +239,14 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
   const editMessageId = params.ctx.TelegramEditMessageId;
   const v3Dir = path.join(params.workspaceDir, "portara-agent", "v3");
 
-  const { results, error } = await fetchExchangeData(v3Dir);
-  if (error) return { shouldContinue: false, reply: { text: error } };
+  if (isOrders) {
+    const { results, error } = await fetchData<OrderResult>(v3Dir, "orders");
+    if (error) return { shouldContinue: false, reply: { text: error } };
+    return { shouldContinue: false, reply: buildReply(buildOrdersText(results), label, channel, editMessageId) };
+  }
 
+  const { results, error } = await fetchData<StateResult>(v3Dir, "state");
+  if (error) return { shouldContinue: false, reply: { text: error } };
   const text = isBalances ? buildBalancesText(results) : buildPositionsText(results);
   return { shouldContinue: false, reply: buildReply(text, label, channel, editMessageId) };
 };

@@ -687,6 +687,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "tools",
     }),
     defineChatCommand({
+      key: "myorders",
+      nativeName: "myorders",
+      description: "Show open Hyperliquid orders, positions and account balance. Refreshes in place.",
+      textAlias: "/myorders",
+      acceptsArgs: false,
+      category: "tools",
+    }),
+    defineChatCommand({
       key: "bash",
       description: "Run host shell commands (host-only).",
       textAlias: "/bash",
