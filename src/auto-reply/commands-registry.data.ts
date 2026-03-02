@@ -681,7 +681,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "strategies",
       nativeName: "strategies",
-      description: "List strategies with status, uptime, CPU and memory. Use start|stop|restart <name> to control.",
+      description: "List strategies with status, uptime, CPU and memory. Subcommands: start|stop|restart|logs <name>.",
       textAlias: "/strategies",
       acceptsArgs: true,
       category: "tools",

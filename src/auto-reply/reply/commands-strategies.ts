@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { open } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { TelegramInlineButtons } from "../../telegram/button-types.js";
 import type { ReplyPayload } from "../types.js";
@@ -7,12 +8,22 @@ import type { CommandHandler } from "./commands-types.js";
 
 const execFileAsync = promisify(execFile);
 
+// Max lines a user can request; keeps responses within messaging platform limits
+const MAX_LOG_LINES = 50;
+const DEFAULT_LOG_LINES = 20;
+// Error lines always shown if present (separate section)
+const STDERR_PEEK_LINES = 10;
+// Safety cap: if log output exceeds this, trim from the top (keep newest)
+const MAX_LOG_CHARS = 3500;
+
 type Pm2Process = {
   name: string;
   pm2_env: {
     status: string;
     pm_uptime: number;
     restart_time: number;
+    pm_out_log_path: string;
+    pm_err_log_path: string;
   };
   monit: {
     memory: number;
@@ -89,30 +100,35 @@ function callbackData(action: string, name: string): string {
   return Buffer.byteLength(raw, "utf8") <= 64 ? raw : raw.slice(0, 63);
 }
 
-// Truncate name for button label (keeping it readable)
+// Short name for button labels
 function shortName(name: string): string {
-  return name.length > 14 ? `${name.slice(0, 13)}…` : name;
+  return name.length > 12 ? `${name.slice(0, 11)}…` : name;
 }
 
+// One row per strategy: emoji-only actions so name fits cleanly.
+// callback_data carries the full command, so each click routes through the normal pipeline.
 function buildStrategyButtons(processes: Pm2Process[]): TelegramInlineButtons {
   return processes.map((proc) => {
     const { status } = proc.pm2_env;
     const n = shortName(proc.name);
+    const logsBtn = { text: `📋 ${n}`, callback_data: callbackData("logs", proc.name) };
 
     if (status === "online") {
       return [
-        { text: `⏹ Stop ${n}`, callback_data: callbackData("stop", proc.name) },
-        { text: `↺ Restart ${n}`, callback_data: callbackData("restart", proc.name) },
+        { text: `⏹ ${n}`, callback_data: callbackData("stop", proc.name) },
+        { text: `↺ ${n}`, callback_data: callbackData("restart", proc.name) },
+        logsBtn,
       ];
     }
     if (status === "stopped" || status === "errored") {
       return [
-        { text: `▶ Start ${n}`, callback_data: callbackData("start", proc.name) },
-        { text: `↺ Restart ${n}`, callback_data: callbackData("restart", proc.name) },
+        { text: `▶ ${n}`, callback_data: callbackData("start", proc.name) },
+        { text: `↺ ${n}`, callback_data: callbackData("restart", proc.name) },
+        logsBtn,
       ];
     }
-    // Transitioning
-    return [{ text: `⏹ Stop ${n}`, callback_data: callbackData("stop", proc.name) }];
+    // Transitioning: only safe actions
+    return [{ text: `⏹ ${n}`, callback_data: callbackData("stop", proc.name) }, logsBtn];
   });
 }
 
@@ -133,6 +149,30 @@ async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: stri
     return { processes: parsed };
   } catch {
     return { processes: [], error: "Failed to parse PM2 output." };
+  }
+}
+
+// Reads the last `maxLines` non-empty lines from a file efficiently.
+// Seeks near the end so it stays fast even on large log files.
+async function tailFile(filePath: string, maxLines: number): Promise<string[]> {
+  let file;
+  try {
+    file = await open(filePath, "r");
+    const { size } = await file.stat();
+    if (size === 0) return [];
+    // Estimate ~150 bytes/line; overshoot to avoid missing lines
+    const bytesToRead = Math.min(size, maxLines * 150 + 512);
+    const buf = Buffer.allocUnsafe(bytesToRead);
+    const { bytesRead } = await file.read(buf, 0, bytesToRead, size - bytesToRead);
+    const text = buf.subarray(0, bytesRead).toString("utf8");
+    const lines = text.split("\n");
+    // Drop the first entry if we started mid-line (only when not at file start)
+    const complete = size > bytesToRead ? lines.slice(1) : lines;
+    return complete.filter((l) => l.trim()).slice(-maxLines);
+  } catch {
+    return [];
+  } finally {
+    await file?.close();
   }
 }
 
@@ -163,18 +203,61 @@ function buildListReply(processes: Pm2Process[], channel: string): ReplyPayload 
   const header = `Strategies — ${summaryParts.join(" · ")}  (${n} total)`;
   const text = [header, "", ...sorted.map(formatProcess)].join("\n");
 
-  // Telegram gets a button grid — one row per strategy with context-appropriate actions.
-  // Buttons use callback_data = the command text (e.g. "/strategies stop scalper-btc"),
-  // which the Telegram handler routes as a synthetic message through the normal command pipeline.
+  // Telegram: button grid below the list — one row per strategy.
+  // ⏹/▶/↺ control the process; 📋 fetches its logs.
+  // Buttons use callback_data = the full command string routed as a synthetic message.
   if (channel === "telegram") {
-    const buttons = buildStrategyButtons(sorted);
-    return { text, channelData: { telegram: { buttons } } };
+    return { text, channelData: { telegram: { buttons: buildStrategyButtons(sorted) } } };
   }
 
   return { text };
 }
 
-async function controlStrategy(action: "start" | "stop" | "restart", name: string): Promise<ReplyPayload> {
+async function buildLogsReply(name: string, maxLines: number): Promise<ReplyPayload> {
+  const { processes, error } = await fetchProcesses();
+  if (error) return { text: error };
+
+  const proc = processes.find((p) => p.name === name);
+  if (!proc) return { text: `Strategy "${name}" not found.` };
+
+  const outPath = proc.pm2_env.pm_out_log_path;
+  const errPath = proc.pm2_env.pm_err_log_path;
+
+  // Fetch stdout and stderr concurrently
+  const [outLines, errLines] = await Promise.all([
+    tailFile(outPath, maxLines),
+    tailFile(errPath, STDERR_PEEK_LINES),
+  ]);
+
+  const parts: string[] = [`📋 ${name}  (last ${maxLines} lines)`, ""];
+
+  if (outLines.length === 0) {
+    parts.push("(no output logged yet)");
+  } else {
+    parts.push(...outLines);
+  }
+
+  if (errLines.length > 0) {
+    parts.push("", `⚠️ Recent errors (${errLines.length} lines)`, ...errLines);
+  }
+
+  // Trim from the top if the combined output is too long for a single message
+  let text = parts.join("\n");
+  if (text.length > MAX_LOG_CHARS) {
+    const header = parts[0];
+    const trimmed = text.slice(text.length - MAX_LOG_CHARS);
+    // Keep from the next newline to avoid a partial first line
+    const cutIndex = trimmed.indexOf("\n");
+    text = `${header}\n…\n${cutIndex >= 0 ? trimmed.slice(cutIndex + 1) : trimmed}`;
+  }
+
+  return { text };
+}
+
+async function controlStrategy(
+  action: "start" | "stop" | "restart",
+  name: string,
+): Promise<ReplyPayload> {
   try {
     await execFileAsync("pm2", [action, name], { timeout: 10000 });
   } catch (err) {
@@ -183,11 +266,11 @@ async function controlStrategy(action: "start" | "stop" | "restart", name: strin
     return { text: `Failed to ${action} "${name}": ${error.message}` };
   }
 
-  // Return the updated status line for the affected strategy
+  // Return the updated status line so the user sees the result immediately
   const { processes } = await fetchProcesses();
   const proc = processes.find((p) => p.name === name);
-  const actionLabel = action === "start" ? "Started" : action === "stop" ? "Stopped" : "Restarted";
-  return { text: proc ? `${actionLabel} — ${formatProcess(proc)}` : `${actionLabel} "${name}".` };
+  const verb = action === "start" ? "Started" : action === "stop" ? "Stopped" : "Restarted";
+  return { text: proc ? `${verb} — ${formatProcess(proc)}` : `${verb} "${name}".` };
 }
 
 export const handleStrategiesCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -200,6 +283,16 @@ export const handleStrategiesCommand: CommandHandler = async (params, allowTextC
   if (unauthorized) return unauthorized;
 
   const rest = body.slice("/strategies".length).trim();
+
+  // /strategies logs <name> [<lines>]
+  const logsMatch = rest.match(/^logs\s+(\S+)(?:\s+(\d+))?$/);
+  if (logsMatch) {
+    const name = logsMatch[1];
+    const lines = logsMatch[2]
+      ? Math.min(MAX_LOG_LINES, Math.max(1, Number.parseInt(logsMatch[2], 10)))
+      : DEFAULT_LOG_LINES;
+    return { shouldContinue: false, reply: await buildLogsReply(name, lines) };
+  }
 
   // /strategies start|stop|restart <name>
   const controlMatch = rest.match(/^(start|stop|restart)\s+(\S+)$/);
@@ -218,6 +311,6 @@ export const handleStrategiesCommand: CommandHandler = async (params, allowTextC
 
   return {
     shouldContinue: false,
-    reply: { text: "Usage: /strategies  or  /strategies start|stop|restart <name>" },
+    reply: { text: "Usage: /strategies  ·  /strategies logs <name> [lines]  ·  /strategies start|stop|restart <name>" },
   };
 };
