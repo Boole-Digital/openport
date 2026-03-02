@@ -112,7 +112,7 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const telegramData = reply.channelData?.telegram as
-      | { buttons?: TelegramInlineButtons }
+      | { buttons?: TelegramInlineButtons; editMessageId?: string | number }
       | undefined;
     const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
     if (mediaList.length === 0) {
@@ -125,6 +125,28 @@ export async function deliverReplies(params: {
         }
         // Only attach buttons to the first chunk.
         const shouldAttachButtons = i === 0 && replyMarkup;
+        // If editMessageId is set (callback button press), edit in place instead of sending new.
+        // Only attempt on the first chunk; subsequent chunks (if any) fall through to send.
+        if (i === 0 && telegramData?.editMessageId != null) {
+          try {
+            await withTelegramApiErrorLogging({
+              operation: "editMessageText",
+              runtime,
+              // Suppress "message is not modified" — not an error worth logging
+              shouldLog: (err) => !String(err).includes("message is not modified"),
+              fn: () =>
+                bot.api.editMessageText(chatId, Number(telegramData.editMessageId), chunk.html, {
+                  parse_mode: "HTML",
+                  ...(shouldAttachButtons ? { reply_markup: replyMarkup } : {}),
+                }),
+            });
+            sentTextChunk = true;
+            markDelivered();
+            continue;
+          } catch {
+            // Edit failed (e.g. message too old) — fall through to send a new message
+          }
+        }
         await sendTelegramText(bot, chatId, chunk.html, runtime, {
           replyToMessageId: replyToMessageIdForPayload,
           replyQuoteText,

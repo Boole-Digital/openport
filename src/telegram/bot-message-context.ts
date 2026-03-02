@@ -718,6 +718,9 @@ export const buildTelegramMessageContext = async ({
     Provider: "telegram",
     Surface: "telegram",
     MessageSid: options?.messageIdOverride ?? String(msg.message_id),
+    // When a callback button was pressed, messageIdOverride is the callback query ID.
+    // Store the actual message_id so the handler can edit the original message in place.
+    TelegramEditMessageId: options?.messageIdOverride ? String(msg.message_id) : undefined,
     ReplyToId: replyTarget?.id,
     ReplyToBody: replyTarget?.body,
     ReplyToSender: replyTarget?.sender,

@@ -102,40 +102,49 @@ function callbackData(action: string, name: string): string {
   return Buffer.byteLength(raw, "utf8") <= 64 ? raw : raw.slice(0, 63);
 }
 
+// Strip common "strategy:" prefix for display — the context makes it redundant.
+// Truncate at 22 chars so button text fits on mobile without Telegram clipping it.
+function buttonLabel(name: string): string {
+  const stripped = name.startsWith("strategy:") ? name.slice("strategy:".length) : name;
+  return stripped.length > 22 ? `${stripped.slice(0, 21)}…` : stripped;
+}
+
 // Overview: one button per strategy, status emoji tells you running/stopped at a glance.
 function buildOverviewButtons(processes: Pm2Process[]): TelegramInlineButtons {
   return processes.map((proc) => {
     const emoji = statusEmoji(proc.pm2_env.status);
-    const label = proc.name.length > 28 ? `${proc.name.slice(0, 27)}…` : proc.name;
-    return [{ text: `${emoji}  ${label}`, callback_data: callbackData("select", proc.name) }];
+    return [{ text: `${emoji}  ${buttonLabel(proc.name)}`, callback_data: callbackData("select", proc.name) }];
   });
 }
 
-// Detail: action row (stop/start/restart/logs) + back button on its own row.
+// Detail buttons: paired primary actions on one row (50/50 split — readable on both mobile and
+// desktop), secondary actions on their own full-width rows.
 function buildDetailButtons(proc: Pm2Process): TelegramInlineButtons {
   const { status } = proc.pm2_env;
-  const logsBtn: TelegramInlineButton = { text: "📋  Logs", callback_data: callbackData("logs", proc.name) };
-  const backBtn: TelegramInlineButton = { text: "‹  All strategies", callback_data: "/mystrategies" };
+  const rows: TelegramInlineButton[][] = [];
 
-  let actionRow: TelegramInlineButton[];
   if (status === "online") {
-    actionRow = [
+    // Stop and Restart are naturally paired — one row, equal width
+    rows.push([
       { text: "⏹  Stop", callback_data: callbackData("stop", proc.name) },
       { text: "↺  Restart", callback_data: callbackData("restart", proc.name) },
-      logsBtn,
-    ];
+    ]);
   } else if (status === "stopped" || status === "errored") {
-    actionRow = [
+    // Start and Restart are naturally paired
+    rows.push([
       { text: "▶  Start", callback_data: callbackData("start", proc.name) },
       { text: "↺  Restart", callback_data: callbackData("restart", proc.name) },
-      logsBtn,
-    ];
+    ]);
   } else {
-    // Transitioning: only safe actions
-    actionRow = [{ text: "⏹  Stop", callback_data: callbackData("stop", proc.name) }, logsBtn];
+    // Transitioning: only safe action
+    rows.push([{ text: "⏹  Stop", callback_data: callbackData("stop", proc.name) }]);
   }
 
-  return [actionRow, [backBtn]];
+  // Secondary actions each get their own full-width row
+  rows.push([{ text: "📋  View Logs", callback_data: callbackData("logs", proc.name) }]);
+  rows.push([{ text: "‹  All Strategies", callback_data: "/mystrategies" }]);
+
+  return rows;
 }
 
 async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: string }> {
@@ -182,7 +191,25 @@ async function tailFile(filePath: string, maxLines: number): Promise<string[]> {
   }
 }
 
-function buildListReply(processes: Pm2Process[], channel: string): ReplyPayload {
+// Build telegram channelData, optionally including an editMessageId so delivery
+// edits the original message in place instead of sending a new one.
+function telegramChannelData(
+  buttons?: TelegramInlineButtons,
+  editMessageId?: string,
+): Record<string, unknown> {
+  return {
+    telegram: {
+      ...(buttons ? { buttons } : {}),
+      ...(editMessageId ? { editMessageId } : {}),
+    },
+  };
+}
+
+function buildListReply(
+  processes: Pm2Process[],
+  channel: string,
+  editMessageId?: string,
+): ReplyPayload {
   if (processes.length === 0) {
     return { text: "No strategies found." };
   }
@@ -208,14 +235,18 @@ function buildListReply(processes: Pm2Process[], channel: string): ReplyPayload 
   const text = `My Strategies  ·  ${summaryParts.join("  ·  ")}\nTap a strategy to view details and controls.`;
 
   if (channel === "telegram") {
-    return { text, channelData: { telegram: { buttons: buildOverviewButtons(sorted) } } };
+    return { text, channelData: telegramChannelData(buildOverviewButtons(sorted), editMessageId) };
   }
 
   // Non-Telegram: show the full text list instead
   return { text: `${text}\n\n${sorted.map(formatProcess).join("\n\n")}` };
 }
 
-async function buildSelectReply(name: string, channel: string): Promise<ReplyPayload> {
+async function buildSelectReply(
+  name: string,
+  channel: string,
+  editMessageId?: string,
+): Promise<ReplyPayload> {
   const { processes, error } = await fetchProcesses();
   if (error) return { text: error };
 
@@ -225,12 +256,16 @@ async function buildSelectReply(name: string, channel: string): Promise<ReplyPay
   const text = formatProcess(proc);
 
   if (channel === "telegram") {
-    return { text, channelData: { telegram: { buttons: buildDetailButtons(proc) } } };
+    return { text, channelData: telegramChannelData(buildDetailButtons(proc), editMessageId) };
   }
   return { text };
 }
 
-async function buildLogsReply(name: string, maxLines: number): Promise<ReplyPayload> {
+async function buildLogsReply(
+  name: string,
+  maxLines: number,
+  editMessageId?: string,
+): Promise<ReplyPayload> {
   const { processes, error } = await fetchProcesses();
   if (error) return { text: error };
 
@@ -268,6 +303,9 @@ async function buildLogsReply(name: string, maxLines: number): Promise<ReplyPayl
     text = `${header}\n…\n${cutIndex >= 0 ? trimmed.slice(cutIndex + 1) : trimmed}`;
   }
 
+  if (editMessageId) {
+    return { text, channelData: telegramChannelData(undefined, editMessageId) };
+  }
   return { text };
 }
 
@@ -275,6 +313,7 @@ async function controlStrategy(
   action: "start" | "stop" | "restart",
   name: string,
   channel: string,
+  editMessageId?: string,
 ): Promise<ReplyPayload> {
   try {
     await execFileAsync("pm2", [action, name], { timeout: 10000 });
@@ -284,8 +323,8 @@ async function controlStrategy(
     return { text: `Failed to ${action} "${name}": ${error.message}` };
   }
 
-  // Return the updated detail view so the user sees the result immediately with fresh buttons
-  return buildSelectReply(name, channel);
+  // Return updated detail view — edits the same message so the user sees the result in place
+  return buildSelectReply(name, channel, editMessageId);
 }
 
 export const handleMyStrategiesCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -307,11 +346,14 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   if (unauthorized) return unauthorized;
 
   const channel = params.command.channel;
+  // Set when command came from a button click — delivery layer will edit the original message
+  // in place rather than sending a new one.
+  const editMessageId = params.ctx.TelegramEditMessageId;
 
   // select <name> — show detail view for one strategy
   const selectMatch = rest.match(/^select\s+(\S.*)$/);
   if (selectMatch) {
-    return { shouldContinue: false, reply: await buildSelectReply(selectMatch[1].trim(), channel) };
+    return { shouldContinue: false, reply: await buildSelectReply(selectMatch[1].trim(), channel, editMessageId) };
   }
 
   // logs <name> [lines]
@@ -321,7 +363,7 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
     const lines = logsMatch[2]
       ? Math.min(MAX_LOG_LINES, Math.max(1, Number.parseInt(logsMatch[2], 10)))
       : DEFAULT_LOG_LINES;
-    return { shouldContinue: false, reply: await buildLogsReply(name, lines) };
+    return { shouldContinue: false, reply: await buildLogsReply(name, lines, editMessageId) };
   }
 
   // start|stop|restart <name>
@@ -329,14 +371,14 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   if (controlMatch) {
     const action = controlMatch[1] as "start" | "stop" | "restart";
     const name = controlMatch[2];
-    return { shouldContinue: false, reply: await controlStrategy(action, name, channel) };
+    return { shouldContinue: false, reply: await controlStrategy(action, name, channel, editMessageId) };
   }
 
   // /mystrategies — list all
   if (!rest) {
     const { processes, error } = await fetchProcesses();
     if (error) return { shouldContinue: false, reply: { text: error } };
-    return { shouldContinue: false, reply: buildListReply(processes, channel) };
+    return { shouldContinue: false, reply: buildListReply(processes, channel, editMessageId) };
   }
 
   return {
