@@ -141,7 +141,7 @@ function formatPnl(pnl: number): string {
 }
 
 function buildBalancesText(results: StateResult[]): string {
-  const lines: string[] = ["My Balances", ""];
+  const lines: string[] = ["**My Balances**", ""];
   for (const r of results) {
     if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
     if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
@@ -149,10 +149,12 @@ function buildBalancesText(results: StateResult[]): string {
     if (nonZero.length === 0) {
       lines.push(`${r.label}  ·  no balances`);
     } else {
-      lines.push(r.label);
+      lines.push(`**${r.label}**`);
+      lines.push("```");
       for (const [asset, amount] of nonZero) {
-        lines.push(`  ${asset.padEnd(8)}  ${formatAmount(amount)}`);
+        lines.push(`${asset.padEnd(10)}${formatAmount(amount)}`);
       }
+      lines.push("```");
     }
     lines.push("");
   }
@@ -160,17 +162,18 @@ function buildBalancesText(results: StateResult[]): string {
 }
 
 function buildPositionsText(results: StateResult[]): string {
-  const lines: string[] = ["My Positions", ""];
+  const lines: string[] = ["**My Positions**", ""];
   for (const r of results) {
     if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
     if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
     const open = r.positions.filter((p) => p.size > 0);
     if (open.length === 0) { lines.push(`${r.label}  ·  no open positions`); continue; }
-    lines.push(r.label);
+    lines.push(`**${r.label}**`);
     for (const p of open) {
       const side = p.side === "long" ? "long " : "short";
       const notional = `$${formatAmount(p.size * p.markPrice)}`;
-      lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} (${notional})  entry ${formatPrice(p.entryPrice)}  pnl ${formatPnl(p.unrealizedPnl)}  ${p.leverage}× lev`);
+      const pnlEmoji = p.unrealizedPnl >= 0 ? "🟢" : "🔴";
+      lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} (${notional})  entry ${formatPrice(p.entryPrice)}  ${pnlEmoji} ${formatPnl(p.unrealizedPnl)}  ${p.leverage}×`);
     }
     lines.push("");
   }
@@ -178,12 +181,12 @@ function buildPositionsText(results: StateResult[]): string {
 }
 
 function buildOrdersText(results: OrderResult[]): string {
-  const lines: string[] = ["My Open Orders", ""];
+  const lines: string[] = ["**My Open Orders**", ""];
   for (const r of results) {
     if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
     if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
     if (r.orders.length === 0) { lines.push(`${r.label}  ·  no open orders`); continue; }
-    lines.push(r.label);
+    lines.push(`**${r.label}**`);
     for (const o of r.orders) {
       const side = o.side === "buy" ? "BUY " : "SELL";
       const qty = o.filled > 0 ? `${formatAmount(o.filled)}/${formatAmount(o.size)} filled` : `qty ${formatAmount(o.size)}`;
