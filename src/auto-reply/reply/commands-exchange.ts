@@ -148,7 +148,28 @@ function formatPnl(pnl: number): string {
 
 function buildBalancesText(results: StateResult[]): string {
   const lines: string[] = ["**My Balances**", ""];
-  for (const r of results) {
+
+  // trade.xyz is built on Hyperliquid and shares the same margin account.
+  // Combine their USD balances under "Hyperliquid / trade.xyz" and skip xyz separately.
+  const hlIdx = results.findIndex((r) => r.id === "hyperliquid");
+  const xyzIdx = results.findIndex((r) => r.id === "xyz");
+  const merged: Record<number, true> = {};
+  let combined: StateResult[] = results.map((r) => ({ ...r }));
+  if (hlIdx !== -1 && xyzIdx !== -1) {
+    const hl = combined[hlIdx];
+    const xyz = combined[xyzIdx];
+    if (hl.configured && !("error" in hl) && xyz.configured && !("error" in xyz)) {
+      combined[hlIdx] = {
+        ...hl,
+        label: "Hyperliquid / trade.xyz",
+        balances: { ...hl.balances, USD: (hl.balances.USD ?? 0) + (xyz.balances.USD ?? 0) },
+      };
+      merged[xyzIdx] = true;
+    }
+  }
+  combined = combined.filter((_, i) => !merged[i]);
+
+  for (const r of combined) {
     if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
     if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
     // USDT0 is Hyperliquid's on-chain USDT used as Dreamcash margin — always 1:1 with USDC, skip it.
