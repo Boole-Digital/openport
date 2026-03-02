@@ -75,23 +75,22 @@ function formatMemory(bytes: number): string {
 
 function formatProcess(proc: Pm2Process): string {
   const emoji = statusEmoji(proc.pm2_env.status);
-  const fields: string[] = [];
 
   if (proc.pm2_env.status === "online") {
-    fields.push(
-      formatUptime(proc.pm2_env.pm_uptime),
-      `${proc.monit.cpu.toFixed(1)}%`,
-      formatMemory(proc.monit.memory),
-    );
-  } else {
-    fields.push(proc.pm2_env.status);
+    const stats = [
+      `⏱ ${formatUptime(proc.pm2_env.pm_uptime)}`,
+      `⚙ ${proc.monit.cpu.toFixed(1)}%`,
+      `💾 ${formatMemory(proc.monit.memory)}`,
+    ];
+    if (proc.pm2_env.restart_time > 0) stats.push(`↺ ${proc.pm2_env.restart_time}`);
+    return `${emoji} ${proc.name}\n   ${stats.join("  ·  ")}`;
   }
 
-  if (proc.pm2_env.restart_time > 0) {
-    fields.push(`↺ ${proc.pm2_env.restart_time}`);
-  }
-
-  return `${emoji} ${proc.name}    ${fields.join("    ")}`;
+  const statusLine =
+    proc.pm2_env.restart_time > 0
+      ? `${proc.pm2_env.status}  ·  ↺ ${proc.pm2_env.restart_time}`
+      : proc.pm2_env.status;
+  return `${emoji} ${proc.name}\n   ${statusLine}`;
 }
 
 // Telegram callback_data limit: 64 bytes
@@ -201,7 +200,7 @@ function buildListReply(processes: Pm2Process[], channel: string): ReplyPayload 
 
   const n = processes.length;
   const header = `Strategies — ${summaryParts.join(" · ")}  (${n} total)`;
-  const text = [header, "", ...sorted.map(formatProcess)].join("\n");
+  const text = `${header}\n\n${sorted.map(formatProcess).join("\n\n")}`;
 
   // Telegram: button grid below the list — one row per strategy.
   // ⏹/▶/↺ control the process; 📋 fetches its logs.
