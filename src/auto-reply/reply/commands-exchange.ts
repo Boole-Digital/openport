@@ -175,14 +175,17 @@ function buildPositionsText(results: StateResult[]): string {
     const open = r.positions.filter((p) => p.size > 0);
     if (open.length === 0) { lines.push(`${r.label}  ·  no open positions`); continue; }
     lines.push(`**${r.label}**`);
-    for (const p of open) {
+    for (let i = 0; i < open.length; i++) {
+      const p = open[i];
+      // add blank line between positions for readability
+      if (i > 0) lines.push("");
       const side = p.side === "long" ? "long " : "short";
       const notional = formatUsd(p.size * p.markPrice);
       const margin = formatUsd((p.size * p.markPrice) / p.leverage);
       const pnlEmoji = p.unrealizedPnl >= 0 ? "🟢" : "🔴";
       lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} ($${notional})  ${p.leverage}×  ${pnlEmoji} ${formatPnl(p.unrealizedPnl)}`);
-      const details = [`entry ${formatPrice(p.entryPrice)}`, `mark ${formatPrice(p.markPrice)}`, `margin $${margin}`];
-      if (p.liquidationPrice > 0) details.push(`liq ${formatPrice(p.liquidationPrice)}`);
+      const details = [`entry $${formatPrice(p.entryPrice)}`, `mark $${formatPrice(p.markPrice)}`, `margin $${margin}`];
+      if (p.liquidationPrice > 0) details.push(`liq $${formatPrice(p.liquidationPrice)}`);
       lines.push(`    ${details.join("  ·  ")}`);
     }
     lines.push("");
