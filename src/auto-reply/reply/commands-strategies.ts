@@ -5,6 +5,7 @@ import type { TelegramInlineButton, TelegramInlineButtons } from "../../telegram
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { isRoutableChannel, routeReply } from "./route-reply.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -348,7 +349,28 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   const channel = params.command.channel;
   // Set when command came from a button click — delivery layer will edit the original message
   // in place rather than sending a new one.
-  const editMessageId = params.ctx.TelegramEditMessageId;
+  let editMessageId = params.ctx.TelegramEditMessageId;
+
+  // Send interim ⏳ on fresh invocations (not button-click refreshes).
+  if (!editMessageId) {
+    const originChannel = params.ctx.OriginatingChannel;
+    const originTo = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
+    if (originChannel && originTo && isRoutableChannel(originChannel)) {
+      const interim = await routeReply({
+        payload: { text: "⏳" },
+        channel: originChannel,
+        to: originTo,
+        sessionKey: params.sessionKey,
+        accountId: params.ctx.AccountId,
+        threadId: params.ctx.MessageThreadId,
+        cfg: params.cfg,
+        mirror: false,
+      });
+      if (channel === "telegram" && interim.messageId) {
+        editMessageId = interim.messageId;
+      }
+    }
+  }
 
   // select <name> — show detail view for one strategy
   const selectMatch = rest.match(/^select\s+(\S.*)$/);
