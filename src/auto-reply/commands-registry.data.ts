@@ -679,6 +679,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       formatArgs: COMMAND_ARG_FORMATTERS.queue,
     }),
     defineChatCommand({
+      key: "strategies",
+      nativeName: "strategies",
+      description: "List strategies with status, uptime, CPU and memory. Use start|stop|restart <name> to control.",
+      textAlias: "/strategies",
+      acceptsArgs: true,
+      category: "tools",
+    }),
+    defineChatCommand({
       key: "bash",
       description: "Run host shell commands (host-only).",
       textAlias: "/bash",
