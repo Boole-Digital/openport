@@ -127,7 +127,12 @@ async function fetchData<T>(
 function formatAmount(amount: number): string {
   if (amount >= 1000) return amount.toLocaleString("en-US", { maximumFractionDigits: 2 });
   if (amount >= 1) return amount.toFixed(4).replace(/\.?0+$/, "");
-  return amount.toPrecision(4);
+  return amount.toPrecision(4).replace(/\.?0+$/, "");
+}
+
+// For USD monetary values — always 2 decimal places, no more.
+function formatUsd(amount: number): string {
+  return amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function formatPrice(price: number): string {
@@ -136,7 +141,7 @@ function formatPrice(price: number): string {
 }
 
 function formatPnl(pnl: number): string {
-  const sign = pnl >= 0 ? "+" : "";
+  const sign = pnl >= 0 ? "+" : "-";
   return `${sign}$${Math.abs(pnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
@@ -171,7 +176,7 @@ function buildPositionsText(results: StateResult[]): string {
     lines.push(`**${r.label}**`);
     for (const p of open) {
       const side = p.side === "long" ? "long " : "short";
-      const notional = `$${formatAmount(p.size * p.markPrice)}`;
+      const notional = `$${formatUsd(p.size * p.markPrice)}`;
       const pnlEmoji = p.unrealizedPnl >= 0 ? "🟢" : "🔴";
       lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} (${notional})  entry ${formatPrice(p.entryPrice)}  ${pnlEmoji} ${formatPnl(p.unrealizedPnl)}  ${p.leverage}×`);
     }
@@ -189,9 +194,8 @@ function buildOrdersText(results: OrderResult[]): string {
     lines.push(`**${r.label}**`);
     for (const o of r.orders) {
       const side = o.side === "buy" ? "BUY " : "SELL";
-      const qty = o.filled > 0 ? `${formatAmount(o.filled)}/${formatAmount(o.size)} filled` : `qty ${formatAmount(o.size)}`;
-      const notional = `$${formatAmount(o.size * o.price)}`;
-      lines.push(`  ${side}  ${o.market}  ${qty}  limit ${formatPrice(o.price)}  (${notional})`);
+      const qty = o.filled > 0 ? `${formatAmount(o.filled)}/${formatAmount(o.size)} filled` : formatAmount(o.size);
+      lines.push(`  ${side}  ${o.market}  ${qty}  @ ${formatPrice(o.price)}  ≈ $${formatUsd(o.size * o.price)}`);
     }
     lines.push("");
   }
