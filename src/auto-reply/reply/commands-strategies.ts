@@ -136,6 +136,7 @@ function buildDetailButtons(s: Strategy): TelegramInlineButtons {
   const rows: TelegramInlineButton[][] = [];
 
   if (!s.process) {
+    rows.push([{ text: "▶  Start", callback_data: callbackData("start", s.stem) }]);
     rows.push([{ text: "‹  All Strategies", callback_data: "/mystrategies" }]);
     return rows;
   }
@@ -189,6 +190,13 @@ function extractStem(pm2Name: string): string {
     return `${parts[2]}_${parts[1]}`;
   }
   return parts[parts.length - 1];
+}
+
+// Reverse: "btc_mm_hyperliquid" → "strategy:hyperliquid:btc_mm"
+function stemToPm2Name(stem: string): string {
+  const i = stem.lastIndexOf("_");
+  if (i > 0) return `strategy:${stem.slice(i + 1)}:${stem.slice(0, i)}`;
+  return `strategy:unknown:${stem}`;
 }
 
 async function fetchStrategyFiles(): Promise<string[]> {
@@ -378,6 +386,21 @@ async function controlStrategy(
 ): Promise<ReplyPayload> {
   const { processes } = await fetchProcesses();
   const proc = resolveProcess(processes, stem);
+
+  // First-time start: pm2 doesn't know this strategy yet
+  if (!proc && action === "start") {
+    const filePath = join(STRATEGIES_DIR, `${stem}.js`);
+    const pm2Name = stemToPm2Name(stem);
+    try {
+      await execFileAsync("pm2", ["start", filePath, "--name", pm2Name, "--interpreter", "node"], { timeout: 10000 });
+    } catch (err) {
+      const error = err as NodeJS.ErrnoException;
+      if (error.code === "ENOENT") return { text: "PM2 is not installed or not in PATH." };
+      return { text: `Failed to start "${stem}": ${error.message}` };
+    }
+    return buildSelectReply(stem, channel, editMessageId);
+  }
+
   if (!proc) return { text: `Strategy "${stem}" is not started — cannot ${action}.` };
 
   try {
