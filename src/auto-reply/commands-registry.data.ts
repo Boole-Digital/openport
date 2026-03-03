@@ -711,6 +711,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "tools",
     }),
     defineChatCommand({
+      key: "update_portara",
+      nativeName: "update_portara",
+      description: "Update your trading tools and agent to the latest version.",
+      textAlias: "/update_portara",
+      acceptsArgs: false,
+      category: "tools",
+    }),
+    defineChatCommand({
       key: "bash",
       description: "Run host shell commands (host-only).",
       textAlias: "/bash",

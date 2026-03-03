@@ -21,6 +21,7 @@ import { handleExchangeCommand } from "./commands-exchange.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handleMyOrdersCommand } from "./commands-orders.js";
 import { handleMyStrategiesCommand } from "./commands-strategies.js";
+import { handleUpdatePortaraCommand } from "./commands-update-portara.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import {
   handleAbortTrigger,
@@ -69,6 +70,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleExchangeCommand,
       handleMyStrategiesCommand,
       handleMyOrdersCommand,
+      handleUpdatePortaraCommand,
       handleStopCommand,
       handleCompactCommand,
       handleAbortTrigger,
