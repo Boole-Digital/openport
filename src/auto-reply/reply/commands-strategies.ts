@@ -181,10 +181,14 @@ async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: stri
   }
 }
 
-// Extract strategy stem from PM2 name: "strategy:exchange:buy_btc_dip" → "buy_btc_dip"
+// Map PM2 name to file stem: "strategy:hyperliquid:btc_mm" → "btc_mm_hyperliquid"
+// Convention: PM2 is strategy:<exchange>:<name>, files are <name>_<exchange>.js
 function extractStem(pm2Name: string): string {
-  const i = pm2Name.lastIndexOf(":");
-  return i >= 0 ? pm2Name.slice(i + 1) : pm2Name;
+  const parts = pm2Name.split(":");
+  if (parts.length === 3 && parts[0] === "strategy") {
+    return `${parts[2]}_${parts[1]}`;
+  }
+  return parts[parts.length - 1];
 }
 
 async function fetchStrategyFiles(): Promise<string[]> {
