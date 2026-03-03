@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
-import { open } from "node:fs/promises";
+import { open, readdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { TelegramInlineButton, TelegramInlineButtons } from "../../telegram/button-types.js";
 import type { ReplyPayload } from "../types.js";
@@ -17,6 +19,9 @@ const STDERR_PEEK_LINES = 10;
 // Safety cap: if log output exceeds this, trim from the top (keep newest)
 const MAX_LOG_CHARS = 3500;
 
+// Convention: agent creates user strategies in this workspace directory
+const STRATEGIES_DIR = join(homedir(), ".openclaw/workspace/portara-agent/v3/strategies");
+
 type Pm2Process = {
   name: string;
   pm2_env: {
@@ -30,6 +35,11 @@ type Pm2Process = {
     memory: number;
     cpu: number;
   };
+};
+
+type Strategy = {
+  stem: string;
+  process?: Pm2Process;
 };
 
 const STATUS_ORDER: Record<string, number> = {
@@ -94,8 +104,13 @@ function formatProcess(proc: Pm2Process): string {
   return `${emoji} ${proc.name}\n   ${statusLine}`;
 }
 
+function formatStrategy(s: Strategy): string {
+  if (s.process) return formatProcess(s.process);
+  return `⚪ ${s.stem}\n   not started`;
+}
+
 // Short /ms prefix keeps callback_data within Telegram's 64-byte limit.
-// e.g. "/ms select strategy:hyperliquid:btc_market_maker_hyperliquid" = 61 bytes ✓
+// e.g. "/ms select buy_btc_dip" — stems are compact, well within 64 bytes.
 const CB_PREFIX = "/ms";
 
 function callbackData(action: string, name: string): string {
@@ -103,46 +118,44 @@ function callbackData(action: string, name: string): string {
   return Buffer.byteLength(raw, "utf8") <= 64 ? raw : raw.slice(0, 63);
 }
 
-// Strip common "strategy:" prefix for display — the context makes it redundant.
 // Truncate at 22 chars so button text fits on mobile without Telegram clipping it.
 function buttonLabel(name: string): string {
-  const stripped = name.startsWith("strategy:") ? name.slice("strategy:".length) : name;
-  return stripped.length > 22 ? `${stripped.slice(0, 21)}…` : stripped;
+  return name.length > 22 ? `${name.slice(0, 21)}…` : name;
 }
 
 // Overview: one button per strategy, status emoji tells you running/stopped at a glance.
-function buildOverviewButtons(processes: Pm2Process[]): TelegramInlineButtons {
-  return processes.map((proc) => {
-    const emoji = statusEmoji(proc.pm2_env.status);
-    return [{ text: `${emoji}  ${buttonLabel(proc.name)}`, callback_data: callbackData("select", proc.name) }];
+function buildOverviewButtons(strategies: Strategy[]): TelegramInlineButtons {
+  return strategies.map((s) => {
+    const emoji = s.process ? statusEmoji(s.process.pm2_env.status) : "⚪";
+    return [{ text: `${emoji}  ${buttonLabel(s.stem)}`, callback_data: callbackData("select", s.stem) }];
   });
 }
 
-// Detail buttons: paired primary actions on one row (50/50 split — readable on both mobile and
-// desktop), secondary actions on their own full-width rows.
-function buildDetailButtons(proc: Pm2Process): TelegramInlineButtons {
-  const { status } = proc.pm2_env;
+// Detail buttons: paired primary actions on one row, secondary actions on their own rows.
+function buildDetailButtons(s: Strategy): TelegramInlineButtons {
   const rows: TelegramInlineButton[][] = [];
 
-  if (status === "online") {
-    // Stop and Restart are naturally paired — one row, equal width
-    rows.push([
-      { text: "⏹  Stop", callback_data: callbackData("stop", proc.name) },
-      { text: "↺  Restart", callback_data: callbackData("restart", proc.name) },
-    ]);
-  } else if (status === "stopped" || status === "errored") {
-    // Start and Restart are naturally paired
-    rows.push([
-      { text: "▶  Start", callback_data: callbackData("start", proc.name) },
-      { text: "↺  Restart", callback_data: callbackData("restart", proc.name) },
-    ]);
-  } else {
-    // Transitioning: only safe action
-    rows.push([{ text: "⏹  Stop", callback_data: callbackData("stop", proc.name) }]);
+  if (!s.process) {
+    rows.push([{ text: "‹  All Strategies", callback_data: "/mystrategies" }]);
+    return rows;
   }
 
-  // Secondary actions each get their own full-width row
-  rows.push([{ text: "📋  View Logs", callback_data: callbackData("logs", proc.name) }]);
+  const { status } = s.process.pm2_env;
+  if (status === "online") {
+    rows.push([
+      { text: "⏹  Stop", callback_data: callbackData("stop", s.stem) },
+      { text: "↺  Restart", callback_data: callbackData("restart", s.stem) },
+    ]);
+  } else if (status === "stopped" || status === "errored") {
+    rows.push([
+      { text: "▶  Start", callback_data: callbackData("start", s.stem) },
+      { text: "↺  Restart", callback_data: callbackData("restart", s.stem) },
+    ]);
+  } else {
+    rows.push([{ text: "⏹  Stop", callback_data: callbackData("stop", s.stem) }]);
+  }
+
+  rows.push([{ text: "📋  View Logs", callback_data: callbackData("logs", s.stem) }]);
   rows.push([{ text: "‹  All Strategies", callback_data: "/mystrategies" }]);
 
   return rows;
@@ -166,6 +179,50 @@ async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: stri
   } catch {
     return { processes: [], error: "Failed to parse PM2 output." };
   }
+}
+
+// Extract strategy stem from PM2 name: "strategy:exchange:buy_btc_dip" → "buy_btc_dip"
+function extractStem(pm2Name: string): string {
+  const i = pm2Name.lastIndexOf(":");
+  return i >= 0 ? pm2Name.slice(i + 1) : pm2Name;
+}
+
+async function fetchStrategyFiles(): Promise<string[]> {
+  try {
+    const entries = await readdir(STRATEGIES_DIR);
+    return entries
+      .filter((f) => f.endsWith(".js") && !f.endsWith("_template.js"))
+      .map((f) => f.slice(0, -3));
+  } catch {
+    return [];
+  }
+}
+
+// Source of truth: strategy files on disk, enriched with PM2 runtime status.
+// Falls back to PM2 strategy:* processes if the directory is unavailable.
+async function fetchStrategies(): Promise<{ strategies: Strategy[]; error?: string }> {
+  const [stems, { processes, error }] = await Promise.all([fetchStrategyFiles(), fetchProcesses()]);
+
+  const pm2ByStem = new Map<string, Pm2Process>();
+  for (const proc of processes) {
+    if (proc.name.startsWith("strategy:")) pm2ByStem.set(extractStem(proc.name), proc);
+  }
+
+  const strategies = stems.map((stem) => ({ stem, process: pm2ByStem.get(stem) }));
+
+  if (strategies.length === 0 && processes.length > 0) {
+    const fallback = processes
+      .filter((p) => p.name.startsWith("strategy:"))
+      .map((p) => ({ stem: extractStem(p.name), process: p }));
+    if (fallback.length > 0) return { strategies: fallback };
+  }
+
+  if (strategies.length === 0 && error) return { strategies: [], error };
+  return { strategies };
+}
+
+function resolveProcess(processes: Pm2Process[], stem: string): Pm2Process | undefined {
+  return processes.find((p) => extractStem(p.name) === stem);
 }
 
 // Reads the last `maxLines` non-empty lines from a file efficiently.
@@ -207,31 +264,35 @@ function telegramChannelData(
 }
 
 function buildListReply(
-  processes: Pm2Process[],
+  strategies: Strategy[],
   channel: string,
   editMessageId?: string,
 ): ReplyPayload {
-  if (processes.length === 0) {
+  if (strategies.length === 0) {
     return { text: "No strategies found." };
   }
 
-  const sorted = [...processes].sort(
-    (a, b) => (STATUS_ORDER[a.pm2_env.status] ?? 9) - (STATUS_ORDER[b.pm2_env.status] ?? 9),
-  );
+  // Sort: running first, then by PM2 status order, unstarted last
+  const sorted = [...strategies].sort((a, b) => {
+    const aOrder = a.process ? (STATUS_ORDER[a.process.pm2_env.status] ?? 9) : 10;
+    const bOrder = b.process ? (STATUS_ORDER[b.process.pm2_env.status] ?? 9) : 10;
+    return aOrder - bOrder;
+  });
 
-  const counts = processes.reduce<Record<string, number>>((acc, p) => {
-    acc[p.pm2_env.status] = (acc[p.pm2_env.status] ?? 0) + 1;
-    return acc;
-  }, {});
+  const counts: Record<string, number> = {};
+  for (const s of strategies) {
+    const status = s.process?.pm2_env.status ?? "not_started";
+    counts[status] = (counts[status] ?? 0) + 1;
+  }
 
   const summaryParts: string[] = [];
   if (counts["online"]) summaryParts.push(`${counts["online"]} running`);
   if (counts["stopped"]) summaryParts.push(`${counts["stopped"]} stopped`);
   if (counts["errored"]) summaryParts.push(`${counts["errored"]} errored`);
-  if ((counts["launching"] ?? 0) + (counts["stopping"] ?? 0) > 0) {
-    summaryParts.push(`${(counts["launching"] ?? 0) + (counts["stopping"] ?? 0)} transitioning`);
-  }
-  if (summaryParts.length === 0) summaryParts.push(`${processes.length} total`);
+  const transitioning = (counts["launching"] ?? 0) + (counts["stopping"] ?? 0);
+  if (transitioning) summaryParts.push(`${transitioning} transitioning`);
+  if (counts["not_started"]) summaryParts.push(`${counts["not_started"]} not started`);
+  if (summaryParts.length === 0) summaryParts.push(`${strategies.length} total`);
 
   const text = `My Strategies  ·  ${summaryParts.join("  ·  ")}\nTap a strategy to view details and controls.`;
 
@@ -239,25 +300,20 @@ function buildListReply(
     return { text, channelData: telegramChannelData(buildOverviewButtons(sorted), editMessageId) };
   }
 
-  // Non-Telegram: show the full text list instead
-  return { text: `${text}\n\n${sorted.map(formatProcess).join("\n\n")}` };
+  return { text: `${text}\n\n${sorted.map(formatStrategy).join("\n\n")}` };
 }
 
 async function buildSelectReply(
-  name: string,
+  stem: string,
   channel: string,
   editMessageId?: string,
 ): Promise<ReplyPayload> {
-  const { processes, error } = await fetchProcesses();
-  if (error) return { text: error };
-
-  const proc = processes.find((p) => p.name === name);
-  if (!proc) return { text: `Strategy "${name}" not found.` };
-
-  const text = formatProcess(proc);
+  const { processes } = await fetchProcesses();
+  const strategy: Strategy = { stem, process: resolveProcess(processes, stem) };
+  const text = formatStrategy(strategy);
 
   if (channel === "telegram") {
-    return { text, channelData: telegramChannelData(buildDetailButtons(proc), editMessageId) };
+    return { text, channelData: telegramChannelData(buildDetailButtons(strategy), editMessageId) };
   }
   return { text };
 }
@@ -270,8 +326,8 @@ async function buildLogsReply(
   const { processes, error } = await fetchProcesses();
   if (error) return { text: error };
 
-  const proc = processes.find((p) => p.name === name);
-  if (!proc) return { text: `Strategy "${name}" not found.` };
+  const proc = resolveProcess(processes, name);
+  if (!proc) return { text: `Strategy "${name}" has no logs — not started.` };
 
   const outPath = proc.pm2_env.pm_out_log_path;
   const errPath = proc.pm2_env.pm_err_log_path;
@@ -312,20 +368,23 @@ async function buildLogsReply(
 
 async function controlStrategy(
   action: "start" | "stop" | "restart",
-  name: string,
+  stem: string,
   channel: string,
   editMessageId?: string,
 ): Promise<ReplyPayload> {
+  const { processes } = await fetchProcesses();
+  const proc = resolveProcess(processes, stem);
+  if (!proc) return { text: `Strategy "${stem}" is not started — cannot ${action}.` };
+
   try {
-    await execFileAsync("pm2", [action, name], { timeout: 10000 });
+    await execFileAsync("pm2", [action, proc.name], { timeout: 10000 });
   } catch (err) {
     const error = err as NodeJS.ErrnoException;
     if (error.code === "ENOENT") return { text: "PM2 is not installed or not in PATH." };
-    return { text: `Failed to ${action} "${name}": ${error.message}` };
+    return { text: `Failed to ${action} "${stem}": ${error.message}` };
   }
 
-  // Return updated detail view — edits the same message so the user sees the result in place
-  return buildSelectReply(name, channel, editMessageId);
+  return buildSelectReply(stem, channel, editMessageId);
 }
 
 export const handleMyStrategiesCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -398,9 +457,9 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
 
   // /mystrategies — list all
   if (!rest) {
-    const { processes, error } = await fetchProcesses();
+    const { strategies, error } = await fetchStrategies();
     if (error) return { shouldContinue: false, reply: { text: error } };
-    return { shouldContinue: false, reply: buildListReply(processes, channel, editMessageId) };
+    return { shouldContinue: false, reply: buildListReply(strategies, channel, editMessageId) };
   }
 
   return {
