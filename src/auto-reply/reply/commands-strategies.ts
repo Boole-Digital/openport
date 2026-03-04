@@ -176,7 +176,13 @@ async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: stri
   }
 
   try {
-    const parsed = JSON.parse(stdout) as Pm2Process[];
+    // PM2 startup noise includes "[PM2] ..." lines before the JSON array.
+    // Find the "[" that begins its own line (the JSON array), not "[PM2]" prefixes.
+    const lineStart = stdout.lastIndexOf("\n[");
+    const jsonStart = lineStart !== -1 ? lineStart + 1 : stdout.startsWith("[") ? 0 : -1;
+    const jsonEnd = stdout.lastIndexOf("]");
+    const jsonStr = jsonStart !== -1 && jsonEnd > jsonStart ? stdout.slice(jsonStart, jsonEnd + 1) : stdout;
+    const parsed = JSON.parse(jsonStr) as Pm2Process[];
     if (!Array.isArray(parsed)) return { processes: [], error: "Unexpected PM2 output format." };
     return { processes: parsed };
   } catch {
