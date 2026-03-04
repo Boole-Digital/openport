@@ -374,6 +374,17 @@ export async function handleInlineActions(params: {
     return { kind: "reply", reply: commandResult.reply };
   }
 
+  // Hidden context injection: rewrite the body the agent sees without showing
+  // the raw callback_data in the chat (e.g. "Work on Strategy" button).
+  if (commandResult.agentMessageOverride) {
+    const overrideBody = commandResult.agentMessageOverride;
+    ctx.Body = overrideBody;
+    ctx.BodyForAgent = overrideBody;
+    sessionCtx.Body = overrideBody;
+    sessionCtx.BodyForAgent = overrideBody;
+    sessionCtx.BodyStripped = overrideBody;
+  }
+
   return {
     kind: "continue",
     directives,

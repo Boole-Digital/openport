@@ -137,6 +137,7 @@ function buildDetailButtons(s: Strategy): TelegramInlineButtons {
 
   if (!s.process) {
     rows.push([{ text: "▶  Start", callback_data: callbackData("start", s.stem) }]);
+    rows.push([{ text: "✏️  Work on Strategy", callback_data: callbackData("work", s.stem) }]);
     rows.push([{ text: "‹  All Strategies", callback_data: "/mystrategies" }]);
     return rows;
   }
@@ -156,6 +157,7 @@ function buildDetailButtons(s: Strategy): TelegramInlineButtons {
     rows.push([{ text: "⏹  Stop", callback_data: callbackData("stop", s.stem) }]);
   }
 
+  rows.push([{ text: "✏️  Work on Strategy", callback_data: callbackData("work", s.stem) }]);
   rows.push([{ text: "📋  View Logs", callback_data: callbackData("logs", s.stem) }]);
   rows.push([{ text: "‹  All Strategies", callback_data: "/mystrategies" }]);
 
@@ -174,7 +176,13 @@ async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: stri
   }
 
   try {
-    const parsed = JSON.parse(stdout) as Pm2Process[];
+    // PM2 startup noise includes "[PM2] ..." lines before the JSON array.
+    // Find the "[" that begins its own line (the JSON array), not "[PM2]" prefixes.
+    const lineStart = stdout.lastIndexOf("\n[");
+    const jsonStart = lineStart !== -1 ? lineStart + 1 : stdout.startsWith("[") ? 0 : -1;
+    const jsonEnd = stdout.lastIndexOf("]");
+    const jsonStr = jsonStart !== -1 && jsonEnd > jsonStart ? stdout.slice(jsonStart, jsonEnd + 1) : stdout;
+    const parsed = JSON.parse(jsonStr) as Pm2Process[];
     if (!Array.isArray(parsed)) return { processes: [], error: "Unexpected PM2 output format." };
     return { processes: parsed };
   } catch {
@@ -480,6 +488,17 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
     const action = controlMatch[1] as "start" | "stop" | "restart";
     const name = controlMatch[2];
     return { shouldContinue: false, reply: await controlStrategy(action, name, channel, editMessageId) };
+  }
+
+  // work <name> — inject strategy filepath as hidden context into the agent's turn
+  const workMatch = rest.match(/^work\s+(\S+)$/);
+  if (workMatch) {
+    const stem = workMatch[1].trim();
+    const filePath = join(STRATEGIES_DIR, `${stem}.js`);
+    return {
+      shouldContinue: true,
+      agentMessageOverride: `Please work on my "${stem}" strategy. The strategy file is at: ${filePath}`,
+    };
   }
 
   // /mystrategies — list all

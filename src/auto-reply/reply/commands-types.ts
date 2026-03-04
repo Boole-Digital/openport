@@ -56,6 +56,13 @@ export type HandleCommandsParams = {
 export type CommandHandlerResult = {
   reply?: ReplyPayload;
   shouldContinue: boolean;
+  /**
+   * When set and shouldContinue is true, the agent sees this body instead of
+   * the original message. Used for hidden context injection (e.g. "Work on
+   * Strategy" — injects the strategy filepath into the agent's turn without
+   * showing the raw callback_data in the chat).
+   */
+  agentMessageOverride?: string;
 };
 
 export type CommandHandler = (
