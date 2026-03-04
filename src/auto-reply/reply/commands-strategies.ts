@@ -137,6 +137,7 @@ function buildDetailButtons(s: Strategy): TelegramInlineButtons {
 
   if (!s.process) {
     rows.push([{ text: "▶  Start", callback_data: callbackData("start", s.stem) }]);
+    rows.push([{ text: "✏️  Work on Strategy", callback_data: callbackData("work", s.stem) }]);
     rows.push([{ text: "‹  All Strategies", callback_data: "/mystrategies" }]);
     return rows;
   }
@@ -156,6 +157,7 @@ function buildDetailButtons(s: Strategy): TelegramInlineButtons {
     rows.push([{ text: "⏹  Stop", callback_data: callbackData("stop", s.stem) }]);
   }
 
+  rows.push([{ text: "✏️  Work on Strategy", callback_data: callbackData("work", s.stem) }]);
   rows.push([{ text: "📋  View Logs", callback_data: callbackData("logs", s.stem) }]);
   rows.push([{ text: "‹  All Strategies", callback_data: "/mystrategies" }]);
 
@@ -480,6 +482,17 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
     const action = controlMatch[1] as "start" | "stop" | "restart";
     const name = controlMatch[2];
     return { shouldContinue: false, reply: await controlStrategy(action, name, channel, editMessageId) };
+  }
+
+  // work <name> — inject strategy filepath as hidden context into the agent's turn
+  const workMatch = rest.match(/^work\s+(\S+)$/);
+  if (workMatch) {
+    const stem = workMatch[1].trim();
+    const filePath = join(STRATEGIES_DIR, `${stem}.js`);
+    return {
+      shouldContinue: true,
+      agentMessageOverride: `Please work on my "${stem}" strategy. The strategy file is at: ${filePath}`,
+    };
   }
 
   // /mystrategies — list all
