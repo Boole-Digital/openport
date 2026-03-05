@@ -62,11 +62,12 @@ Rules:
 - Do not repeat the error summary — the user already has it.`;
 
 const IDLE_CHECKIN_PROMPT = `It has been over 8 hours since the user last interacted. Send ONE brief, friendly check-in message (1-2 sentences). Pick one of these:
-- A helpful tip about what the user can do with Portara (trading features, strategy management, monitoring).
-- An interesting observation about crypto markets right now.
-- A reminder about a useful Portara command they might not know about.
+- An idea for an interesting trading strategy the user could build and deploy with Portara (e.g. grid trading, momentum scalping, mean reversion, funding-rate arb, cross-exchange spread).
+- A tip on how Portara helps strategise, deploy, or monitor strategies (e.g. backtesting, live deployment via PM2, real-time error alerts, performance tracking).
+- A reminder about a useful Portara command: /mystrategies to list all strategies with their status, /mybalances to check exchange balances, /myorders to see open orders, /mypositions to view open positions, /update_portara to update the agent, /new to start a fresh session.
 
-Do NOT ask if they need help. Do NOT be generic. Be specific and useful. Do NOT repeat previous check-ins.`;
+Focus on what Portara can do for the user — strategy ideas, deployment workflows, monitoring capabilities. Do NOT talk about general market observations or prices.
+Do NOT ask if they need help. Do NOT be generic. Be specific and actionable. Do NOT repeat previous check-ins.`;
 
 export async function runPm2MonitorPhase(opts: {
   cfg: OpenClawConfig;
