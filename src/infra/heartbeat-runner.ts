@@ -1103,6 +1103,12 @@ export function startHeartbeatRunner(opts: {
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
+    log.info("heartbeat: run handler called", {
+      stopped: state.stopped,
+      heartbeatsEnabled,
+      agentsSize: state.agents.size,
+      reason: params?.reason,
+    });
     if (state.stopped) {
       return {
         status: "skipped",
