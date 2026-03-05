@@ -230,6 +230,17 @@ export type AgentDefaultsConfig = {
      * Default: false (only the final heartbeat payload is delivered).
      */
     includeReasoning?: boolean;
+    /** PM2 process error monitoring — collects errors in code and uses the primary model for fix proposals. */
+    pm2Monitor?: {
+      /** Enable PM2 error monitoring on heartbeat ticks. */
+      enabled?: boolean;
+      /** Number of log lines to fetch per process (default: 50). */
+      logLines?: number;
+      /** Custom error patterns to match (case-insensitive; default: error, warn, crash, fatal, etc.). */
+      errorPatterns?: string[];
+      /** Hours of inactivity before sending an idle check-in (default: 8; 0 disables). */
+      idleHours?: number;
+    };
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
