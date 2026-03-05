@@ -651,6 +651,12 @@ export async function runHeartbeatOnce(opts: {
   // Only runs on regular interval/wake triggers (not exec/cron events).
   const pm2Cfg = heartbeat?.pm2Monitor;
   const isSpecialEvent = preflight.isExecEventReason || preflight.isCronEventReason;
+  log.info("heartbeat: pm2 guard", {
+    pm2Enabled: pm2Cfg?.enabled,
+    isSpecialEvent,
+    deliveryChannel: delivery.channel,
+    deliveryTo: delivery.to,
+  });
   if (pm2Cfg?.enabled && !isSpecialEvent && delivery.channel !== "none" && delivery.to) {
     try {
       const pm2Result = await runPm2MonitorPhase({
