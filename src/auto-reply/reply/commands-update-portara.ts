@@ -158,6 +158,37 @@ export const handleUpdatePortaraCommand: CommandHandler = async (params, allowTe
     return { shouldContinue: false, reply };
   }
 
+  // Step 2b: Ensure heartbeat + PM2 monitor config exists
+  await runScript(
+    `
+set -e
+# Set heartbeat config if not already present
+if ! openclaw config get agents.defaults.heartbeat.every >/dev/null 2>&1; then
+  openclaw config set agents.defaults.heartbeat.every 30m
+fi
+if ! openclaw config get agents.defaults.heartbeat.model >/dev/null 2>&1; then
+  openclaw config set agents.defaults.heartbeat.model openrouter/openrouter/auto
+fi
+# Set pm2Monitor if not already present
+if ! openclaw config get agents.defaults.heartbeat.pm2Monitor >/dev/null 2>&1; then
+  openclaw config set agents.defaults.heartbeat.pm2Monitor '{"enabled": true, "logLines": 50, "idleHours": 8}'
+fi
+
+# Ensure HEARTBEAT.md exists (required for heartbeat preflight)
+if [ ! -f "${WORKSPACE_DIR}/HEARTBEAT.md" ] || ! grep -q "HEARTBEAT_OK" "${WORKSPACE_DIR}/HEARTBEAT.md"; then
+  cat > "${WORKSPACE_DIR}/HEARTBEAT.md" << 'HBEOF'
+# Heartbeat
+
+PM2 error monitoring and idle check-ins are handled automatically in code.
+If nothing needs attention, reply HEARTBEAT_OK.
+HBEOF
+fi
+
+echo "heartbeat config updated"
+`,
+    30_000,
+  );
+
   // Step 3: Spawn detached restart (gateway stop + start --force)
   // This runs in a detached process so it survives the gateway shutdown.
   spawnGatewayRestart();

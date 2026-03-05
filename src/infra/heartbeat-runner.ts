@@ -572,29 +572,23 @@ export async function runHeartbeatOnce(opts: {
   const cfg = opts.cfg ?? loadConfig();
   const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
-  log.info("heartbeat: tick entered", { agentId, heartbeatsEnabled, reason: opts.reason });
   if (!heartbeatsEnabled) {
-    log.info("heartbeat: skip — heartbeatsEnabled=false");
     return { status: "skipped", reason: "disabled" };
   }
   if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
-    log.info("heartbeat: skip — not enabled for agent", { agentId });
     return { status: "skipped", reason: "disabled" };
   }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
-    log.info("heartbeat: skip — no valid interval");
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
   if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
-    log.info("heartbeat: skip — outside active hours");
     return { status: "skipped", reason: "quiet-hours" };
   }
 
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
   if (queueSize > 0) {
-    log.info("heartbeat: skip — requests in flight", { queueSize });
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
@@ -651,12 +645,6 @@ export async function runHeartbeatOnce(opts: {
   // Only runs on regular interval/wake triggers (not exec/cron events).
   const pm2Cfg = heartbeat?.pm2Monitor;
   const isSpecialEvent = preflight.isExecEventReason || preflight.isCronEventReason;
-  log.info("heartbeat: pm2 guard", {
-    pm2Enabled: pm2Cfg?.enabled,
-    isSpecialEvent,
-    deliveryChannel: delivery.channel,
-    deliveryTo: delivery.to,
-  });
   if (pm2Cfg?.enabled && !isSpecialEvent && delivery.channel !== "none" && delivery.to) {
     try {
       const pm2Result = await runPm2MonitorPhase({
@@ -1109,12 +1097,6 @@ export function startHeartbeatRunner(opts: {
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
-    log.info("heartbeat: run handler called", {
-      stopped: state.stopped,
-      heartbeatsEnabled,
-      agentsSize: state.agents.size,
-      reason: params?.reason,
-    });
     if (state.stopped) {
       return {
         status: "skipped",
