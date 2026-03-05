@@ -30,6 +30,15 @@ export const HeartbeatSchema = z
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
+    pm2Monitor: z
+      .object({
+        enabled: z.boolean().optional(),
+        logLines: z.number().int().positive().optional(),
+        errorPatterns: z.array(z.string()).optional(),
+        idleHours: z.number().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((val, ctx) => {

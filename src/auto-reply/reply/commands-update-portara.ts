@@ -14,7 +14,10 @@ const AGENT_DIR = join(homedir(), ".openclaw/workspace/portara-agent");
 const WORKSPACE_DIR = join(homedir(), ".openclaw/workspace");
 const OPENPORT_DIR = join(homedir(), "openport");
 
-async function runScript(script: string, timeoutMs: number): Promise<{ ok: boolean; output: string }> {
+async function runScript(
+  script: string,
+  timeoutMs: number,
+): Promise<{ ok: boolean; output: string }> {
   try {
     const { stdout, stderr } = await execAsync(script, {
       shell: "/bin/bash",
@@ -31,7 +34,8 @@ async function runScript(script: string, timeoutMs: number): Promise<{ ok: boole
 }
 
 function updatePortaraAgent(): Promise<{ ok: boolean; output: string }> {
-  return runScript(`
+  return runScript(
+    `
 set -e
 if [ ! -f "${TOKEN_FILE}" ]; then
   echo "ERROR: Token file not found at ${TOKEN_FILE}"
@@ -51,50 +55,70 @@ ln -sfn v3/node_modules "${AGENT_DIR}/node_modules"
 ln -sfn "${AGENT_DIR}/v3/node_modules" "${WORKSPACE_DIR}/node_modules"
 
 echo "portara-agent updated successfully"
-`, 120_000);
+`,
+    120_000,
+  );
 }
 
 function buildOpenport(): Promise<{ ok: boolean; output: string }> {
-  return runScript(`
+  return runScript(
+    `
 set -e
 cd "${OPENPORT_DIR}"
 git pull origin main 2>&1
 pnpm install 2>&1
 pnpm build 2>&1
 echo "openport build successful"
-`, 300_000);
+`,
+    300_000,
+  );
 }
 
 // Spawns a detached script that stops and restarts the gateway.
 // Must be detached because `gateway stop` kills the current process.
 function spawnGatewayRestart(): void {
-  const child = spawn("/bin/bash", ["-c", `
+  const child = spawn(
+    "/bin/bash",
+    [
+      "-c",
+      `
 sleep 1
 cd "${OPENPORT_DIR}"
 openclaw gateway stop 2>&1 || true
 sleep 2
 openclaw gateway start --force > /tmp/openclaw-restart.log 2>&1
-`], {
-    detached: true,
-    stdio: "ignore",
-    env: { ...process.env, HOME: homedir() },
-  });
+`,
+    ],
+    {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, HOME: homedir() },
+    },
+  );
   child.unref();
 }
 
 function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
+  if (text.length <= max) {
+    return text;
+  }
   return `…${text.slice(text.length - max)}`;
 }
 
 export const handleUpdatePortaraCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
 
   const body = params.command.commandBodyNormalized;
-  if (body !== "/update_portara" && !body.startsWith("/update_portara ")) return null;
+  if (body !== "/update_portara" && !body.startsWith("/update_portara ")) {
+    return null;
+  }
 
   const unauthorized = rejectUnauthorizedCommand(params, "/update_portara");
-  if (unauthorized) return unauthorized;
+  if (unauthorized) {
+    return unauthorized;
+  }
 
   const originChannel = params.ctx.OriginatingChannel;
   const originTo = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;

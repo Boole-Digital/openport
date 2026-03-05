@@ -44,7 +44,13 @@ type Order = {
 type StateResult =
   | { id: ExchangeId; label: string; configured: false }
   | { id: ExchangeId; label: string; configured: true; error: string }
-  | { id: ExchangeId; label: string; configured: true; balances: Record<string, number>; positions: Position[] };
+  | {
+      id: ExchangeId;
+      label: string;
+      configured: true;
+      balances: Record<string, number>;
+      positions: Position[];
+    };
 
 type OrderResult =
   | { id: ExchangeId; label: string; configured: false }
@@ -100,7 +106,11 @@ async function fetchData<T>(
   try {
     await access(v3Dir);
   } catch {
-    return { results: [], error: "portara-agent not found in workspace. Ensure it is cloned to workspace/portara-agent." };
+    return {
+      results: [],
+      error:
+        "portara-agent not found in workspace. Ensure it is cloned to workspace/portara-agent.",
+    };
   }
 
   const tmpDir = await mkdtemp(path.join(tmpdir(), "portara-ex-"));
@@ -114,9 +124,14 @@ async function fetchData<T>(
     return { results: JSON.parse(stdout) as T[] };
   } catch (err) {
     const error = err as NodeJS.ErrnoException & { killed?: boolean; stderr?: string };
-    if (error.code === "ENOENT") return { results: [], error: "Node.js is not installed or not in PATH." };
-    if (error.killed) return { results: [], error: "Exchange query timed out after 20s." };
-    const detail = error.stderr?.split("\n").find((l) => l.trim() && !l.startsWith(" ")) ?? error.message;
+    if (error.code === "ENOENT") {
+      return { results: [], error: "Node.js is not installed or not in PATH." };
+    }
+    if (error.killed) {
+      return { results: [], error: "Exchange query timed out after 20s." };
+    }
+    const detail =
+      error.stderr?.split("\n").find((l) => l.trim() && !l.startsWith(" ")) ?? error.message;
     return { results: [], error: `Exchange query failed: ${detail}` };
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
@@ -126,8 +141,12 @@ async function fetchData<T>(
 // --- Formatting ---
 
 function formatAmount(amount: number): string {
-  if (amount >= 1000) return amount.toLocaleString("en-US", { maximumFractionDigits: 2 });
-  if (amount >= 1) return amount.toFixed(4).replace(/\.?0+$/, "");
+  if (amount >= 1000) {
+    return amount.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  }
+  if (amount >= 1) {
+    return amount.toFixed(4).replace(/\.?0+$/, "");
+  }
   return amount.toPrecision(4).replace(/\.?0+$/, "");
 }
 
@@ -137,7 +156,9 @@ function formatUsd(amount: number): string {
 }
 
 function formatPrice(price: number): string {
-  if (price >= 1000) return price.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (price >= 1000) {
+    return price.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  }
   return price.toFixed(4).replace(/\.?0+$/, "");
 }
 
@@ -170,10 +191,18 @@ function buildBalancesText(results: StateResult[]): string {
   combined = combined.filter((_, i) => !merged[i]);
 
   for (const r of combined) {
-    if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
-    if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
+    if (!r.configured) {
+      lines.push(`${r.label}  ·  not configured`);
+      continue;
+    }
+    if ("error" in r) {
+      lines.push(`${r.label}  ·  error: ${r.error}`);
+      continue;
+    }
     // USDT0 is Hyperliquid's on-chain USDT used as Dreamcash margin — always 1:1 with USDC, skip it.
-    const nonZero = Object.entries(r.balances).filter(([k, v]) => v !== 0 && !(r.id === "cash" && k === "USDT0"));
+    const nonZero = Object.entries(r.balances).filter(
+      ([k, v]) => v !== 0 && !(r.id === "cash" && k === "USDT0"),
+    );
     if (nonZero.length === 0) {
       lines.push(`${r.label}  ·  no balances`);
     } else {
@@ -192,8 +221,14 @@ function buildBalancesText(results: StateResult[]): string {
 function buildPositionsText(results: StateResult[]): string {
   const lines: string[] = ["**My Positions**", ""];
   for (const r of results) {
-    if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
-    if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
+    if (!r.configured) {
+      lines.push(`${r.label}  ·  not configured`);
+      continue;
+    }
+    if ("error" in r) {
+      lines.push(`${r.label}  ·  error: ${r.error}`);
+      continue;
+    }
     const open = r.positions.filter((p) => p.size > 0);
     if (open.length === 0) {
       lines.push(`**${r.label}**`);
@@ -205,13 +240,23 @@ function buildPositionsText(results: StateResult[]): string {
     for (let i = 0; i < open.length; i++) {
       const p = open[i];
       // add blank line between positions for readability
-      if (i > 0) lines.push("");
+      if (i > 0) {
+        lines.push("");
+      }
       const side = p.side === "long" ? "long " : "short";
       const notional = formatUsd(p.size * p.markPrice);
       const margin = formatUsd((p.size * p.markPrice) / p.leverage);
-      lines.push(`  ${side}  ${p.market}  ${formatAmount(p.size)} ($${notional})  ${p.leverage}×  PNL ${formatPnl(p.unrealizedPnl)}`);
-      const details = [`entry $${formatPrice(p.entryPrice)}`, `mark $${formatPrice(p.markPrice)}`, `margin $${margin}`];
-      if (p.liquidationPrice > 0) details.push(`liq $${formatPrice(p.liquidationPrice)}`);
+      lines.push(
+        `  ${side}  ${p.market}  ${formatAmount(p.size)} ($${notional})  ${p.leverage}×  PNL ${formatPnl(p.unrealizedPnl)}`,
+      );
+      const details = [
+        `entry $${formatPrice(p.entryPrice)}`,
+        `mark $${formatPrice(p.markPrice)}`,
+        `margin $${margin}`,
+      ];
+      if (p.liquidationPrice > 0) {
+        details.push(`liq $${formatPrice(p.liquidationPrice)}`);
+      }
       lines.push(`    ${details.join("  ·  ")}`);
     }
     lines.push("");
@@ -222,8 +267,14 @@ function buildPositionsText(results: StateResult[]): string {
 function buildOrdersText(results: OrderResult[]): string {
   const lines: string[] = ["**My Open Orders**", ""];
   for (const r of results) {
-    if (!r.configured) { lines.push(`${r.label}  ·  not configured`); continue; }
-    if ("error" in r) { lines.push(`${r.label}  ·  error: ${r.error}`); continue; }
+    if (!r.configured) {
+      lines.push(`${r.label}  ·  not configured`);
+      continue;
+    }
+    if ("error" in r) {
+      lines.push(`${r.label}  ·  error: ${r.error}`);
+      continue;
+    }
     if (r.orders.length === 0) {
       lines.push(`**${r.label}**`);
       lines.push("  no open orders");
@@ -232,11 +283,18 @@ function buildOrdersText(results: OrderResult[]): string {
     }
     lines.push(`**${r.label}**`);
     for (let i = 0; i < r.orders.length; i++) {
-      if (i > 0) lines.push("");
+      if (i > 0) {
+        lines.push("");
+      }
       const o = r.orders[i];
       const side = o.side === "buy" ? "BUY " : "SELL";
-      const qty = o.filled > 0 ? `${formatAmount(o.filled)}/${formatAmount(o.size)} filled` : formatAmount(o.size);
-      lines.push(`  ${side}  ${o.market}  ${qty}  @ $${formatPrice(o.price)}  ≈ $${formatUsd(o.size * o.price)}`);
+      const qty =
+        o.filled > 0
+          ? `${formatAmount(o.filled)}/${formatAmount(o.size)} filled`
+          : formatAmount(o.size);
+      lines.push(
+        `  ${side}  ${o.market}  ${qty}  @ $${formatPrice(o.price)}  ≈ $${formatUsd(o.size * o.price)}`,
+      );
     }
     lines.push("");
   }
@@ -273,17 +331,23 @@ function buildReply(
 // --- Main handler ---
 
 export const handleExchangeCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
 
   const body = params.command.commandBodyNormalized;
   const isBalances = body === "/mybalances" || body.startsWith("/mybalances ");
   const isPositions = body === "/mypositions" || body.startsWith("/mypositions ");
   const isOrders = body === "/myorders" || body.startsWith("/myorders ");
-  if (!isBalances && !isPositions && !isOrders) return null;
+  if (!isBalances && !isPositions && !isOrders) {
+    return null;
+  }
 
   const label = isBalances ? "/mybalances" : isPositions ? "/mypositions" : "/myorders";
   const unauthorized = rejectUnauthorizedCommand(params, label);
-  if (unauthorized) return unauthorized;
+  if (unauthorized) {
+    return unauthorized;
+  }
 
   const channel = params.command.channel;
   const v3Dir = path.join(params.workspaceDir, "portara-agent", "v3");
@@ -313,12 +377,19 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
 
   if (isOrders) {
     const { results, error } = await fetchData<OrderResult>(v3Dir, "orders");
-    if (error) return { shouldContinue: false, reply: { text: error } };
-    return { shouldContinue: false, reply: buildReply(buildOrdersText(results), label, channel, editMessageId) };
+    if (error) {
+      return { shouldContinue: false, reply: { text: error } };
+    }
+    return {
+      shouldContinue: false,
+      reply: buildReply(buildOrdersText(results), label, channel, editMessageId),
+    };
   }
 
   const { results, error } = await fetchData<StateResult>(v3Dir, "state");
-  if (error) return { shouldContinue: false, reply: { text: error } };
+  if (error) {
+    return { shouldContinue: false, reply: { text: error } };
+  }
   const text = isBalances ? buildBalancesText(results) : buildPositionsText(results);
   return { shouldContinue: false, reply: buildReply(text, label, channel, editMessageId) };
 };

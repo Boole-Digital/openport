@@ -69,18 +69,26 @@ function statusEmoji(status: string): string {
 function formatUptime(uptimeMs: number): string {
   const elapsed = Math.max(0, Date.now() - uptimeMs);
   const s = Math.floor(elapsed / 1000);
-  if (s < 60) return `${s}s`;
+  if (s < 60) {
+    return `${s}s`;
+  }
   const m = Math.floor(s / 60) % 60;
   const h = Math.floor(s / 3600) % 24;
   const d = Math.floor(s / 86400);
-  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
-  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  if (d > 0) {
+    return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  }
+  if (h > 0) {
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
   return `${m}m`;
 }
 
 function formatMemory(bytes: number): string {
   const mb = bytes / (1024 * 1024);
-  if (mb < 1) return `${Math.round(bytes / 1024)} KB`;
+  if (mb < 1) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
   return mb < 100 ? `${mb.toFixed(1)} MB` : `${Math.round(mb)} MB`;
 }
 
@@ -93,7 +101,9 @@ function formatProcess(proc: Pm2Process): string {
       `⚙ ${proc.monit.cpu.toFixed(1)}%`,
       `💾 ${formatMemory(proc.monit.memory)}`,
     ];
-    if (proc.pm2_env.restart_time > 0) stats.push(`↺ ${proc.pm2_env.restart_time}`);
+    if (proc.pm2_env.restart_time > 0) {
+      stats.push(`↺ ${proc.pm2_env.restart_time}`);
+    }
     return `${emoji} ${proc.name}\n   ${stats.join("  ·  ")}`;
   }
 
@@ -105,7 +115,9 @@ function formatProcess(proc: Pm2Process): string {
 }
 
 function formatStrategy(s: Strategy): string {
-  if (s.process) return formatProcess(s.process);
+  if (s.process) {
+    return formatProcess(s.process);
+  }
   return `⚪ ${s.stem}\n   not started`;
 }
 
@@ -127,7 +139,9 @@ function buttonLabel(name: string): string {
 function buildOverviewButtons(strategies: Strategy[]): TelegramInlineButtons {
   return strategies.map((s) => {
     const emoji = s.process ? statusEmoji(s.process.pm2_env.status) : "⚪";
-    return [{ text: `${emoji}  ${buttonLabel(s.stem)}`, callback_data: callbackData("select", s.stem) }];
+    return [
+      { text: `${emoji}  ${buttonLabel(s.stem)}`, callback_data: callbackData("select", s.stem) },
+    ];
   });
 }
 
@@ -170,8 +184,12 @@ async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: stri
     ({ stdout } = await execFileAsync("pm2", ["jlist"], { timeout: 8000 }));
   } catch (err) {
     const error = err as NodeJS.ErrnoException & { killed?: boolean };
-    if (error.code === "ENOENT") return { processes: [], error: "PM2 is not installed or not in PATH." };
-    if (error.killed) return { processes: [], error: "PM2 query timed out. Is the PM2 daemon running?" };
+    if (error.code === "ENOENT") {
+      return { processes: [], error: "PM2 is not installed or not in PATH." };
+    }
+    if (error.killed) {
+      return { processes: [], error: "PM2 query timed out. Is the PM2 daemon running?" };
+    }
     return { processes: [], error: `PM2 error: ${error.message}` };
   }
 
@@ -181,9 +199,12 @@ async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: stri
     const lineStart = stdout.lastIndexOf("\n[");
     const jsonStart = lineStart !== -1 ? lineStart + 1 : stdout.startsWith("[") ? 0 : -1;
     const jsonEnd = stdout.lastIndexOf("]");
-    const jsonStr = jsonStart !== -1 && jsonEnd > jsonStart ? stdout.slice(jsonStart, jsonEnd + 1) : stdout;
+    const jsonStr =
+      jsonStart !== -1 && jsonEnd > jsonStart ? stdout.slice(jsonStart, jsonEnd + 1) : stdout;
     const parsed = JSON.parse(jsonStr) as Pm2Process[];
-    if (!Array.isArray(parsed)) return { processes: [], error: "Unexpected PM2 output format." };
+    if (!Array.isArray(parsed)) {
+      return { processes: [], error: "Unexpected PM2 output format." };
+    }
     return { processes: parsed };
   } catch {
     return { processes: [], error: "Failed to parse PM2 output." };
@@ -203,7 +224,9 @@ function extractStem(pm2Name: string): string {
 // Reverse: "btc_mm_hyperliquid" → "strategy:hyperliquid:btc_mm"
 function stemToPm2Name(stem: string): string {
   const i = stem.lastIndexOf("_");
-  if (i > 0) return `strategy:${stem.slice(i + 1)}:${stem.slice(0, i)}`;
+  if (i > 0) {
+    return `strategy:${stem.slice(i + 1)}:${stem.slice(0, i)}`;
+  }
   return `strategy:unknown:${stem}`;
 }
 
@@ -225,7 +248,9 @@ async function fetchStrategies(): Promise<{ strategies: Strategy[]; error?: stri
 
   const pm2ByStem = new Map<string, Pm2Process>();
   for (const proc of processes) {
-    if (proc.name.startsWith("strategy:")) pm2ByStem.set(extractStem(proc.name), proc);
+    if (proc.name.startsWith("strategy:")) {
+      pm2ByStem.set(extractStem(proc.name), proc);
+    }
   }
 
   const strategies = stems.map((stem) => ({ stem, process: pm2ByStem.get(stem) }));
@@ -234,10 +259,14 @@ async function fetchStrategies(): Promise<{ strategies: Strategy[]; error?: stri
     const fallback = processes
       .filter((p) => p.name.startsWith("strategy:"))
       .map((p) => ({ stem: extractStem(p.name), process: p }));
-    if (fallback.length > 0) return { strategies: fallback };
+    if (fallback.length > 0) {
+      return { strategies: fallback };
+    }
   }
 
-  if (strategies.length === 0 && error) return { strategies: [], error };
+  if (strategies.length === 0 && error) {
+    return { strategies: [], error };
+  }
   return { strategies };
 }
 
@@ -252,7 +281,9 @@ async function tailFile(filePath: string, maxLines: number): Promise<string[]> {
   try {
     file = await open(filePath, "r");
     const { size } = await file.stat();
-    if (size === 0) return [];
+    if (size === 0) {
+      return [];
+    }
     // Estimate ~150 bytes/line; overshoot to avoid missing lines
     const bytesToRead = Math.min(size, maxLines * 150 + 512);
     const buf = Buffer.allocUnsafe(bytesToRead);
@@ -293,7 +324,7 @@ function buildListReply(
   }
 
   // Sort: running first, then by PM2 status order, unstarted last
-  const sorted = [...strategies].sort((a, b) => {
+  const sorted = [...strategies].toSorted((a, b) => {
     const aOrder = a.process ? (STATUS_ORDER[a.process.pm2_env.status] ?? 9) : 10;
     const bOrder = b.process ? (STATUS_ORDER[b.process.pm2_env.status] ?? 9) : 10;
     return aOrder - bOrder;
@@ -306,13 +337,25 @@ function buildListReply(
   }
 
   const summaryParts: string[] = [];
-  if (counts["online"]) summaryParts.push(`${counts["online"]} running`);
-  if (counts["stopped"]) summaryParts.push(`${counts["stopped"]} stopped`);
-  if (counts["errored"]) summaryParts.push(`${counts["errored"]} errored`);
+  if (counts["online"]) {
+    summaryParts.push(`${counts["online"]} running`);
+  }
+  if (counts["stopped"]) {
+    summaryParts.push(`${counts["stopped"]} stopped`);
+  }
+  if (counts["errored"]) {
+    summaryParts.push(`${counts["errored"]} errored`);
+  }
   const transitioning = (counts["launching"] ?? 0) + (counts["stopping"] ?? 0);
-  if (transitioning) summaryParts.push(`${transitioning} transitioning`);
-  if (counts["not_started"]) summaryParts.push(`${counts["not_started"]} not started`);
-  if (summaryParts.length === 0) summaryParts.push(`${strategies.length} total`);
+  if (transitioning) {
+    summaryParts.push(`${transitioning} transitioning`);
+  }
+  if (counts["not_started"]) {
+    summaryParts.push(`${counts["not_started"]} not started`);
+  }
+  if (summaryParts.length === 0) {
+    summaryParts.push(`${strategies.length} total`);
+  }
 
   const text = `My Strategies  ·  ${summaryParts.join("  ·  ")}\nTap a strategy to view details and controls.`;
 
@@ -344,10 +387,14 @@ async function buildLogsReply(
   editMessageId?: string,
 ): Promise<ReplyPayload> {
   const { processes, error } = await fetchProcesses();
-  if (error) return { text: error };
+  if (error) {
+    return { text: error };
+  }
 
   const proc = resolveProcess(processes, name);
-  if (!proc) return { text: `Strategy "${name}" has no logs — not started.` };
+  if (!proc) {
+    return { text: `Strategy "${name}" has no logs — not started.` };
+  }
 
   const outPath = proc.pm2_env.pm_out_log_path;
   const errPath = proc.pm2_env.pm_err_log_path;
@@ -400,22 +447,30 @@ async function controlStrategy(
     const filePath = join(STRATEGIES_DIR, `${stem}.js`);
     const pm2Name = stemToPm2Name(stem);
     try {
-      await execFileAsync("pm2", ["start", filePath, "--name", pm2Name, "--interpreter", "node"], { timeout: 10000 });
+      await execFileAsync("pm2", ["start", filePath, "--name", pm2Name, "--interpreter", "node"], {
+        timeout: 10000,
+      });
     } catch (err) {
       const error = err as NodeJS.ErrnoException;
-      if (error.code === "ENOENT") return { text: "PM2 is not installed or not in PATH." };
+      if (error.code === "ENOENT") {
+        return { text: "PM2 is not installed or not in PATH." };
+      }
       return { text: `Failed to start "${stem}": ${error.message}` };
     }
     return buildSelectReply(stem, channel, editMessageId);
   }
 
-  if (!proc) return { text: `Strategy "${stem}" is not started — cannot ${action}.` };
+  if (!proc) {
+    return { text: `Strategy "${stem}" is not started — cannot ${action}.` };
+  }
 
   try {
     await execFileAsync("pm2", [action, proc.name], { timeout: 10000 });
   } catch (err) {
     const error = err as NodeJS.ErrnoException;
-    if (error.code === "ENOENT") return { text: "PM2 is not installed or not in PATH." };
+    if (error.code === "ENOENT") {
+      return { text: "PM2 is not installed or not in PATH." };
+    }
     return { text: `Failed to ${action} "${stem}": ${error.message}` };
   }
 
@@ -423,7 +478,9 @@ async function controlStrategy(
 }
 
 export const handleMyStrategiesCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
 
   const body = params.command.commandBodyNormalized;
 
@@ -438,7 +495,9 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   }
 
   const unauthorized = rejectUnauthorizedCommand(params, "/mystrategies");
-  if (unauthorized) return unauthorized;
+  if (unauthorized) {
+    return unauthorized;
+  }
 
   const channel = params.command.channel;
   // Set when command came from a button click — delivery layer will edit the original message
@@ -469,7 +528,10 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   // select <name> — show detail view for one strategy
   const selectMatch = rest.match(/^select\s+(\S.*)$/);
   if (selectMatch) {
-    return { shouldContinue: false, reply: await buildSelectReply(selectMatch[1].trim(), channel, editMessageId) };
+    return {
+      shouldContinue: false,
+      reply: await buildSelectReply(selectMatch[1].trim(), channel, editMessageId),
+    };
   }
 
   // logs <name> [lines]
@@ -487,7 +549,10 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   if (controlMatch) {
     const action = controlMatch[1] as "start" | "stop" | "restart";
     const name = controlMatch[2];
-    return { shouldContinue: false, reply: await controlStrategy(action, name, channel, editMessageId) };
+    return {
+      shouldContinue: false,
+      reply: await controlStrategy(action, name, channel, editMessageId),
+    };
   }
 
   // work <name> — inject strategy filepath as hidden context into the agent's turn
@@ -504,12 +569,16 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   // /mystrategies — list all
   if (!rest) {
     const { strategies, error } = await fetchStrategies();
-    if (error) return { shouldContinue: false, reply: { text: error } };
+    if (error) {
+      return { shouldContinue: false, reply: { text: error } };
+    }
     return { shouldContinue: false, reply: buildListReply(strategies, channel, editMessageId) };
   }
 
   return {
     shouldContinue: false,
-    reply: { text: "Usage: /mystrategies  ·  /mystrategies logs <name> [lines]  ·  /mystrategies start|stop|restart <name>" },
+    reply: {
+      text: "Usage: /mystrategies  ·  /mystrategies logs <name> [lines]  ·  /mystrategies start|stop|restart <name>",
+    },
   };
 };

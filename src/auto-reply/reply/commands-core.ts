@@ -9,6 +9,7 @@ import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
+import { handleExchangeCommand } from "./commands-exchange.js";
 import {
   handleCommandsListCommand,
   handleContextCommand,
@@ -17,11 +18,8 @@ import {
   handleStatusCommand,
   handleWhoamiCommand,
 } from "./commands-info.js";
-import { handleExchangeCommand } from "./commands-exchange.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handleMyOrdersCommand } from "./commands-orders.js";
-import { handleMyStrategiesCommand } from "./commands-strategies.js";
-import { handleUpdatePortaraCommand } from "./commands-update-portara.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import {
   handleAbortTrigger,
@@ -32,6 +30,7 @@ import {
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
+import { handleMyStrategiesCommand } from "./commands-strategies.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type {
@@ -39,6 +38,7 @@ import type {
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
+import { handleUpdatePortaraCommand } from "./commands-update-portara.js";
 import { routeReply } from "./route-reply.js";
 
 let HANDLERS: CommandHandler[] | null = null;
