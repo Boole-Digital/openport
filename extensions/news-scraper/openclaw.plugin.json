@@ -1,0 +1,31 @@
+{
+  "id": "news-scraper",
+  "name": "News Scraper",
+  "description": "Scrape news from web sources on schedule, summarize with LLM, and deliver to your channels.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "openrouterApiKey": {
+        "type": "string",
+        "description": "OpenRouter API key for free/cheap LLM summarization."
+      },
+      "openrouterModel": {
+        "type": "string",
+        "description": "OpenRouter model ID (default: meta-llama/llama-3.3-70b-instruct:free)."
+      },
+      "scraplingUrl": {
+        "type": "string",
+        "description": "Optional Scrapling MCP HTTP server URL for stealth scraping (e.g. http://localhost:8000)."
+      },
+      "maxItemsPerFeed": {
+        "type": "number",
+        "description": "Max items to process per feed per check (default: 20)."
+      },
+      "playwrightTimeout": {
+        "type": "number",
+        "description": "Playwright page load timeout in ms (default: 30000)."
+      }
+    }
+  }
+}
