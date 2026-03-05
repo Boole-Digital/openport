@@ -572,23 +572,29 @@ export async function runHeartbeatOnce(opts: {
   const cfg = opts.cfg ?? loadConfig();
   const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  log.info("heartbeat: tick entered", { agentId, heartbeatsEnabled, reason: opts.reason });
   if (!heartbeatsEnabled) {
+    log.info("heartbeat: skip — heartbeatsEnabled=false");
     return { status: "skipped", reason: "disabled" };
   }
   if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+    log.info("heartbeat: skip — not enabled for agent", { agentId });
     return { status: "skipped", reason: "disabled" };
   }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+    log.info("heartbeat: skip — no valid interval");
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
   if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+    log.info("heartbeat: skip — outside active hours");
     return { status: "skipped", reason: "quiet-hours" };
   }
 
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
   if (queueSize > 0) {
+    log.info("heartbeat: skip — requests in flight", { queueSize });
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
