@@ -1,7 +1,7 @@
 import { hashItem } from "./differ.js";
 import type { Feed, NewsItem, PluginCfg, RawItem, StrategyTrigger } from "./types.js";
 
-const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+const DEFAULT_MODEL = "openrouter/auto";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 /** Max items per LLM batch call to keep token usage low. */
