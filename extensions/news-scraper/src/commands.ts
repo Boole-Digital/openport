@@ -58,7 +58,8 @@ function buildTempFeed(url: string, name: string, keywords: string[], useScrapli
 /** Format a news item for display in messaging channels. */
 function formatItem(item: NewsItem): string {
   const rel = item.relevance === "high" ? "🔴" : item.relevance === "medium" ? "🟡" : "⚪";
-  const link = item.url ? `\n${item.url}` : "";
+  // Wrap URL in <> to suppress link previews on Telegram/Discord/Slack
+  const link = item.url ? `\n<${item.url}>` : "";
   return `${rel} ${item.summary}${link}`;
 }
 
