@@ -13,19 +13,27 @@ Standalone test:
 """
 
 import sys
+import os
 import json
 import argparse
 import subprocess
 
 
+VENV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".scrapling-venv")
+
+
 def ensure_scrapling():
-    """Auto-install scrapling if not present."""
+    """Auto-install scrapling into a local venv if not present."""
     try:
         import scrapling  # noqa: F811
 
         return
     except ImportError:
-        sys.stderr.write("scrapling not found, installing...\n")
+        pass
+
+    # If we're already running inside our venv, pip install directly
+    if sys.prefix == VENV_DIR:
+        sys.stderr.write("scrapling not found in venv, installing...\n")
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "scrapling[all]", "-q"],
             stdout=subprocess.DEVNULL,
@@ -37,9 +45,30 @@ def ensure_scrapling():
                 stderr=subprocess.DEVNULL,
             )
         except Exception:
-            sys.stderr.write(
-                "note: playwright browser install skipped (may already exist)\n"
+            pass
+        return
+
+    # Create venv and re-exec inside it
+    venv_python = os.path.join(VENV_DIR, "bin", "python3")
+    if not os.path.exists(venv_python):
+        sys.stderr.write(f"creating scrapling venv at {VENV_DIR}...\n")
+        subprocess.check_call([sys.executable, "-m", "venv", VENV_DIR])
+        sys.stderr.write("installing scrapling (first run, may take a minute)...\n")
+        subprocess.check_call(
+            [venv_python, "-m", "pip", "install", "scrapling[all]", "-q"],
+            stdout=subprocess.DEVNULL,
+        )
+        try:
+            subprocess.check_call(
+                [venv_python, "-m", "playwright", "install", "chromium"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
+        except Exception:
+            pass
+
+    # Re-exec this script with the venv python
+    os.execv(venv_python, [venv_python] + sys.argv)
 
 
 def _first(elements):
