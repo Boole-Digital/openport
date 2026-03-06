@@ -418,6 +418,18 @@ async function fetchTweetViaFxTwitter(tweetId: string, username: string): Promis
   if (!tweet?.text) return [];
 
   const author = tweet.author?.name ?? tweet.author?.screen_name ?? username;
+  const handle = tweet.author?.screen_name ?? username;
+
+  // Put the actual tweet content in the title so the summarizer treats it as primary
+  const tweetText = tweet.text.slice(0, 500);
+  const title = `@${handle}: ${tweetText}`;
+
+  // Body: full tweet + quoted tweet + engagement for context
+  let body = tweet.text;
+  if (tweet.quote?.text) {
+    const quoteAuthor = tweet.quote.author?.name ?? tweet.quote.author?.screen_name ?? "";
+    body += `\n\nQuoting @${quoteAuthor}: ${tweet.quote.text}`;
+  }
   const stats = [
     tweet.likes != null ? `${tweet.likes} likes` : "",
     tweet.retweets != null ? `${tweet.retweets} retweets` : "",
@@ -425,18 +437,12 @@ async function fetchTweetViaFxTwitter(tweetId: string, username: string): Promis
   ]
     .filter(Boolean)
     .join(", ");
-
-  let body = tweet.text;
-  if (tweet.quote?.text) {
-    const quoteAuthor = tweet.quote.author?.name ?? tweet.quote.author?.screen_name ?? "";
-    body += `\n\nQuoting ${quoteAuthor}: ${tweet.quote.text}`;
-  }
-  if (stats) body += `\n\n${stats}`;
+  if (stats) body += `\n\n(${stats})`;
 
   const items: RawItem[] = [
     {
-      title: `@${tweet.author?.screen_name ?? username} (${author})`,
-      body,
+      title,
+      body: body.slice(0, 2000),
       url: tweet.url ?? `https://x.com/${username}/status/${tweetId}`,
       publishedAt: tweet.created_at,
     },
@@ -474,13 +480,16 @@ export async function scrapeX(
 
     const items = await page.$$eval("article", (articles) =>
       articles.slice(0, 30).map((el) => {
-        const tweetText = el.querySelector("[data-testid='tweetText']")?.textContent ?? "";
+        const tweetText = (el.querySelector("[data-testid='tweetText']")?.textContent ?? "").slice(
+          0,
+          500,
+        );
         const userName = el.querySelector("[data-testid='User-Name']")?.textContent ?? "";
         const timeEl = el.querySelector("time");
         const tweetLink = el.querySelector("a[href*='/status/']") as HTMLAnchorElement | null;
         return {
-          title: userName,
-          body: tweetText,
+          title: userName ? `${userName}: ${tweetText}` : tweetText,
+          body: tweetText.slice(0, 2000),
           url: tweetLink?.href ?? "",
           publishedAt: timeEl?.getAttribute("datetime") ?? "",
         };
