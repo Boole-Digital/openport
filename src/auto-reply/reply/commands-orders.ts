@@ -51,30 +51,48 @@ async function hlPost<T>(body: Record<string, unknown>): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Hyperliquid API ${res.status}`);
+  if (!res.ok) {
+    throw new Error(`Hyperliquid API ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
 function formatPrice(px: string): string {
   const n = parseFloat(px);
-  if (isNaN(n) || n === 0) return "—";
-  if (n >= 10000) return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
-  if (n >= 100) return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
-  if (n >= 1) return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  if (isNaN(n) || n === 0) {
+    return "—";
+  }
+  if (n >= 10000) {
+    return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  }
+  if (n >= 100) {
+    return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  }
+  if (n >= 1) {
+    return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  }
   return n.toLocaleString("en-US", { maximumFractionDigits: 6 });
 }
 
 function formatSize(sz: string): string {
   const n = Math.abs(parseFloat(sz));
-  if (isNaN(n)) return sz;
-  if (n >= 1000) return n.toLocaleString("en-US", { maximumFractionDigits: 1 });
-  if (n >= 1) return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  if (isNaN(n)) {
+    return sz;
+  }
+  if (n >= 1000) {
+    return n.toLocaleString("en-US", { maximumFractionDigits: 1 });
+  }
+  if (n >= 1) {
+    return n.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  }
   return n.toLocaleString("en-US", { maximumFractionDigits: 6 });
 }
 
 function formatUSDC(val: string): string {
   const n = parseFloat(val);
-  if (isNaN(n)) return val;
+  if (isNaN(n)) {
+    return val;
+  }
   const abs = Math.abs(n);
   const formatted =
     abs >= 10000
@@ -85,7 +103,9 @@ function formatUSDC(val: string): string {
 
 function formatRoe(roe: string): string {
   const n = parseFloat(roe) * 100;
-  if (isNaN(n)) return "";
+  if (isNaN(n)) {
+    return "";
+  }
   return n >= 0 ? ` (+${n.toFixed(1)}%)` : ` (${n.toFixed(1)}%)`;
 }
 
@@ -132,7 +152,11 @@ function buildOrdersReply(
 ): ReplyPayload {
   const positions = (state.assetPositions ?? [])
     .filter((ap) => parseFloat(ap.position.szi) !== 0)
-    .sort((a, b) => Math.abs(parseFloat(b.position.unrealizedPnl)) - Math.abs(parseFloat(a.position.unrealizedPnl)));
+    .toSorted(
+      (a, b) =>
+        Math.abs(parseFloat(b.position.unrealizedPnl)) -
+        Math.abs(parseFloat(a.position.unrealizedPnl)),
+    );
 
   const accountValue = formatUSDC(state.marginSummary?.accountValue ?? "0");
   const withdrawable = formatUSDC(state.withdrawable ?? "0");
@@ -142,9 +166,15 @@ function buildOrdersReply(
 
   // Header
   const summaryParts: string[] = [];
-  if (orders.length > 0) summaryParts.push(`${orders.length} open order${orders.length !== 1 ? "s" : ""}`);
-  if (positions.length > 0) summaryParts.push(`${positions.length} position${positions.length !== 1 ? "s" : ""}`);
-  if (summaryParts.length === 0) summaryParts.push("no open orders or positions");
+  if (orders.length > 0) {
+    summaryParts.push(`${orders.length} open order${orders.length !== 1 ? "s" : ""}`);
+  }
+  if (positions.length > 0) {
+    summaryParts.push(`${positions.length} position${positions.length !== 1 ? "s" : ""}`);
+  }
+  if (summaryParts.length === 0) {
+    summaryParts.push("no open orders or positions");
+  }
   parts.push(`My Account  ·  ${summaryParts.join("  ·  ")}`);
 
   // Account summary
@@ -183,20 +213,26 @@ function buildOrdersReply(
 }
 
 export const handleMyOrdersCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
 
   const body = params.command.commandBodyNormalized;
-  if (!body.startsWith("/myorders")) return null;
+  if (!body.startsWith("/myorders")) {
+    return null;
+  }
 
   const unauthorized = rejectUnauthorizedCommand(params, "/myorders");
-  if (unauthorized) return unauthorized;
+  if (unauthorized) {
+    return unauthorized;
+  }
 
   const address = process.env["HYPERLIQUID_ADDRESS"]?.trim();
   if (!address) {
     return {
       shouldContinue: false,
       reply: {
-        text: "⚠️ HYPERLIQUID_ADDRESS not set.\nAdd to ~/.profile:\nexport HYPERLIQUID_ADDRESS=\"0x...\"",
+        text: '⚠️ HYPERLIQUID_ADDRESS not set.\nAdd to ~/.profile:\nexport HYPERLIQUID_ADDRESS="0x..."',
       },
     };
   }

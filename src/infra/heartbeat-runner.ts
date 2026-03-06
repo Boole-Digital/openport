@@ -49,6 +49,7 @@ import {
   isExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+import { runPm2MonitorPhase } from "./heartbeat-pm2.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -637,6 +638,41 @@ export async function runHeartbeatOnce(opts: {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
   }).responsePrefix;
+
+  // ── PM2 monitor phase ──────────────────────────────────────────────
+  // Runs before the standard LLM call. If new PM2 errors are found,
+  // delivers an error summary + fix proposal and short-circuits.
+  // Only runs on regular interval/wake triggers (not exec/cron events).
+  const pm2Cfg = heartbeat?.pm2Monitor;
+  const isSpecialEvent = preflight.isExecEventReason || preflight.isCronEventReason;
+  if (pm2Cfg?.enabled && !isSpecialEvent && delivery.channel !== "none" && delivery.to) {
+    try {
+      const pm2Result = await runPm2MonitorPhase({
+        cfg,
+        agentId,
+        heartbeat,
+        sessionKey,
+        delivery: { ...delivery, channel: delivery.channel, to: delivery.to },
+        sender,
+        startedAt,
+        sessionUpdatedAt: previousUpdatedAt,
+        deps: opts.deps,
+      });
+      if (pm2Result.handled) {
+        emitHeartbeatEvent({
+          status: "sent",
+          reason: "pm2-errors",
+          durationMs: Date.now() - startedAt,
+          channel: delivery.channel,
+          accountId: delivery.accountId,
+        });
+        return { status: "ran", durationMs: Date.now() - startedAt };
+      }
+    } catch (err) {
+      // PM2 monitoring is best-effort; fall through to normal heartbeat
+      log.warn("heartbeat: pm2 monitor phase failed", { error: String(err) });
+    }
+  }
 
   // Check if this is an exec event or cron event with pending system events.
   // If so, use a specialized prompt that instructs the model to relay the result

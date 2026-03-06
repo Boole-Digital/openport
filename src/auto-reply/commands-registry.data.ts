@@ -705,7 +705,8 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "mystrategies",
       nativeName: "mystrategies",
-      description: "List your strategies with status. Tap a strategy for controls: start, stop, restart, logs.",
+      description:
+        "List your strategies with status. Tap a strategy for controls: start, stop, restart, logs.",
       textAlias: "/mystrategies",
       acceptsArgs: true,
       category: "tools",
