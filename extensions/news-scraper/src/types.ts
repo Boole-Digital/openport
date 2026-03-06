@@ -1,5 +1,5 @@
 /** Supported feed source types. */
-export type FeedType = "rss" | "web" | "x-search";
+export type FeedType = "rss" | "web" | "x-search" | "telegram";
 
 /** Relevance classification assigned by the LLM summarizer. */
 export type Relevance = "high" | "medium" | "low";

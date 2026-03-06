@@ -20,9 +20,9 @@ export function registerNewsCli(program: Command, api: OpenClawPluginApi): void 
   news
     .command("add")
     .description("Add a new news feed")
-    .requiredOption("--url <url>", "Feed URL (RSS, web page, or X search URL)")
+    .requiredOption("--url <url>", "Feed URL (RSS, web page, X search, or Telegram channel URL)")
     .requiredOption("--name <name>", "Human-friendly feed name")
-    .option("--type <type>", "Feed type: rss, web, x-search (auto-detected if omitted)")
+    .option("--type <type>", "Feed type: rss, web, x-search, telegram (auto-detected if omitted)")
     .option("--keywords <words>", "Comma-separated keywords to filter by")
     .option("--schedule <cron>", `Cron schedule (default: "${DEFAULT_SCHEDULE}")`)
     .option("--strategy <stem>", "Strategy stem to trigger on high-relevance news")
@@ -212,8 +212,9 @@ export function registerNewsCli(program: Command, api: OpenClawPluginApi): void 
 // Auto-detection helpers
 // ---------------------------------------------------------------------------
 
-function detectFeedType(url: string): FeedType {
+export function detectFeedType(url: string): FeedType {
   const lower = url.toLowerCase();
+  if (lower.includes("t.me/")) return "telegram";
   if (lower.includes("x.com/") || lower.includes("twitter.com/")) return "x-search";
   if (
     lower.endsWith("/rss") ||

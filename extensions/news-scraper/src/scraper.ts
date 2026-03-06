@@ -202,6 +202,63 @@ async function scrapeViaScraping(url: string, scraplingUrl: string): Promise<Raw
 }
 
 // ---------------------------------------------------------------------------
+// Telegram public channel scraping (static HTML via t.me/s/ web preview)
+// ---------------------------------------------------------------------------
+
+/** Normalize a Telegram URL to the /s/ web preview form. */
+function normalizeTelegramUrl(url: string): string {
+  const u = new URL(url.startsWith("http") ? url : `https://${url}`);
+  const parts = u.pathname.replace(/^\/+/, "").split("/").filter(Boolean);
+  // Already /s/channel → keep it; otherwise prepend /s/
+  if (parts[0] === "s" && parts.length >= 2) {
+    return `https://t.me/s/${parts.slice(1).join("/")}`;
+  }
+  return `https://t.me/s/${parts.join("/")}`;
+}
+
+export async function scrapeTelegram(url: string): Promise<RawItem[]> {
+  const normalizedUrl = normalizeTelegramUrl(url);
+  const res = await fetch(normalizedUrl, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; OpenClaw-News/1.0)" },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`Telegram fetch failed: ${res.status} ${res.statusText}`);
+  const html = await res.text();
+  return extractTelegramMessages(html);
+}
+
+/** Parse Telegram channel web preview HTML into RawItems using linkedom. */
+async function extractTelegramMessages(html: string): Promise<RawItem[]> {
+  const { parseHTML } = await import("linkedom");
+  const { document } = parseHTML(html);
+
+  // Channel name from the sidebar header
+  const channelName =
+    document
+      .querySelector(".tgme_channel_info_header_title span[dir='auto']")
+      ?.textContent?.trim() ?? "";
+
+  const messageEls = document.querySelectorAll(".tgme_widget_message");
+  const items: RawItem[] = [];
+
+  for (const msg of messageEls) {
+    const body = msg.querySelector(".tgme_widget_message_text")?.textContent?.trim() ?? "";
+    if (!body) continue; // skip media-only messages
+
+    const dateLink = msg.querySelector("a.tgme_widget_message_date");
+    const href = dateLink?.getAttribute("href") ?? "";
+    const permalink = href.startsWith("http") ? href : href ? `https://t.me${href}` : undefined;
+
+    const timeEl = msg.querySelector("time.time");
+    const publishedAt = timeEl?.getAttribute("datetime") ?? undefined;
+
+    items.push({ title: channelName, body, url: permalink, publishedAt });
+  }
+
+  return items;
+}
+
+// ---------------------------------------------------------------------------
 // Unified entry point
 // ---------------------------------------------------------------------------
 
@@ -215,6 +272,8 @@ export async function scrapeFeed(feed: Feed, cfg: PluginCfg): Promise<RawItem[]>
       return scrapeWeb(feed.url, { jsRender: feed.jsRender, playwrightTimeout: timeout });
     case "x-search":
       return scrapeX(feed.url, { scraplingUrl: cfg.scraplingUrl, playwrightTimeout: timeout });
+    case "telegram":
+      return scrapeTelegram(feed.url);
     default:
       throw new Error(`Unknown feed type: ${feed.type}`);
   }

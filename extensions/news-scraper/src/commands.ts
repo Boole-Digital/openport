@@ -1,0 +1,237 @@
+import { randomBytes } from "node:crypto";
+import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+import { detectFeedType } from "./cli.js";
+import { diffItems } from "./differ.js";
+import { loadFeeds, loadFeedState, removeFeed, saveFeed, saveFeedState } from "./feeds.js";
+import { scrapeFeed } from "./scraper.js";
+import { summarizeItems } from "./summarizer.js";
+import type { Feed, NewsItem, PluginCfg } from "./types.js";
+
+const DEFAULT_SOURCE_URL = "https://news.treeofalpha.com/";
+const DEFAULT_SOURCE_NAME = "Tree of Alpha";
+const DEFAULT_SCHEDULE = "0 */2 * * *";
+
+function genId(): string {
+  return randomBytes(6).toString("hex");
+}
+
+/** Detect whether a token looks like a URL. */
+function isUrl(token: string): boolean {
+  return /^https?:\/\//i.test(token) || token.includes("t.me/") || token.includes("x.com/");
+}
+
+/** Parse args into URLs and keyword tokens. */
+function parseArgs(args: string): { urls: string[]; keywords: string[] } {
+  const tokens = args.split(/\s+/).filter(Boolean);
+  const urls: string[] = [];
+  const keywords: string[] = [];
+  for (const t of tokens) {
+    if (isUrl(t)) {
+      urls.push(t.startsWith("http") ? t : `https://${t}`);
+    } else {
+      keywords.push(t);
+    }
+  }
+  return { urls, keywords };
+}
+
+/** Build a temporary Feed object for one-shot scraping. */
+function buildTempFeed(url: string, name: string, keywords: string[]): Feed {
+  const feedType = detectFeedType(url);
+  // Tree of Alpha is JS-rendered
+  const jsRender = feedType === "web" && url.includes("treeofalpha.com");
+  return {
+    id: genId(),
+    name,
+    type: feedType,
+    url,
+    keywords: keywords.length > 0 ? keywords : undefined,
+    jsRender,
+    enabled: true,
+  };
+}
+
+/** Format a news item for display in messaging channels. */
+function formatItem(item: NewsItem): string {
+  const rel = item.relevance === "high" ? "🔴" : item.relevance === "medium" ? "🟡" : "⚪";
+  const link = item.url ? `\n${item.url}` : "";
+  return `${rel} ${item.summary}${link}`;
+}
+
+// ---------------------------------------------------------------------------
+// /news — one-shot news fetch
+// ---------------------------------------------------------------------------
+
+async function handleNews(args: string, cfg: PluginCfg): Promise<string> {
+  const { urls, keywords } = parseArgs(args);
+
+  // Default to Tree of Alpha if no source specified
+  const sources =
+    urls.length > 0
+      ? urls.map((u) => ({ url: u, name: u }))
+      : [{ url: DEFAULT_SOURCE_URL, name: DEFAULT_SOURCE_NAME }];
+
+  const allItems: NewsItem[] = [];
+  const errors: string[] = [];
+
+  for (const source of sources) {
+    const feed = buildTempFeed(source.url, source.name, keywords);
+    try {
+      const rawItems = await scrapeFeed(feed, cfg);
+      if (rawItems.length === 0) {
+        errors.push(`${source.name}: no items found`);
+        continue;
+      }
+      const { items } = await summarizeItems(
+        rawItems.slice(0, cfg.maxItemsPerFeed ?? 20),
+        feed,
+        cfg,
+      );
+      allItems.push(...items);
+    } catch (err) {
+      errors.push(`${source.name}: ${(err as Error).message}`);
+    }
+  }
+
+  if (allItems.length === 0 && errors.length > 0) {
+    return `Could not fetch news.\n${errors.join("\n")}`;
+  }
+
+  if (allItems.length === 0) {
+    return "No news items found.";
+  }
+
+  // Sort: high relevance first, then medium, then low
+  const order = { high: 0, medium: 1, low: 2 };
+  allItems.sort((a, b) => (order[a.relevance ?? "low"] ?? 2) - (order[b.relevance ?? "low"] ?? 2));
+
+  // Filter by keywords if any (keep high-relevance items regardless)
+  const filtered =
+    keywords.length > 0
+      ? allItems.filter(
+          (item) =>
+            item.relevance === "high" ||
+            keywords.some(
+              (kw) =>
+                item.title.toLowerCase().includes(kw.toLowerCase()) ||
+                item.summary.toLowerCase().includes(kw.toLowerCase()),
+            ),
+        )
+      : allItems;
+
+  const display = filtered.length > 0 ? filtered : allItems.slice(0, 10);
+
+  const sourceLabel = sources.length === 1 ? sources[0]!.name : `${sources.length} sources`;
+  const keywordLabel = keywords.length > 0 ? ` (${keywords.join(", ")})` : "";
+  const header = `📰 Latest News — ${sourceLabel}${keywordLabel}\n`;
+  const body = display.slice(0, 15).map(formatItem).join("\n\n");
+  const footer = errors.length > 0 ? `\n\n⚠️ ${errors.join("; ")}` : "";
+
+  return `${header}\n${body}${footer}`;
+}
+
+// ---------------------------------------------------------------------------
+// /newswatch — set up or manage recurring news watches
+// ---------------------------------------------------------------------------
+
+async function handleNewsWatch(args: string, cfg: PluginCfg): Promise<string> {
+  const tokens = args.split(/\s+/).filter(Boolean);
+  const action = tokens[0]?.toLowerCase() ?? "";
+
+  // /newswatch list
+  if (action === "list") {
+    const feeds = await loadFeeds();
+    if (feeds.length === 0) return "No active news watches. Use /newswatch <topic> to start one.";
+    const lines = await Promise.all(
+      feeds.map(async (f) => {
+        const state = await loadFeedState(f.id);
+        const lastChecked = state.lastCheckedAt
+          ? new Date(state.lastCheckedAt).toLocaleString()
+          : "never";
+        const kw = f.keywords?.length ? ` [${f.keywords.join(", ")}]` : "";
+        const status = f.enabled ? "🟢" : "🔴";
+        return `${status} ${f.name}${kw}\n   ID: ${f.id} · ${f.type} · last: ${lastChecked}`;
+      }),
+    );
+    return `👁️ Active News Watches\n\n${lines.join("\n\n")}`;
+  }
+
+  // /newswatch stop <id>
+  if (action === "stop" || action === "remove") {
+    const feedId = tokens[1]?.trim();
+    if (!feedId) return "Usage: /newswatch stop <id>\n\nUse /newswatch list to see feed IDs.";
+    const ok = await removeFeed(feedId);
+    if (!ok) return `Feed ${feedId} not found. Use /newswatch list to see active watches.`;
+    return `Stopped watching feed ${feedId}.`;
+  }
+
+  // /newswatch [urls...] [keywords...] — set up a new watch
+  const { urls, keywords } = parseArgs(args);
+  const sources = urls.length > 0 ? urls : [DEFAULT_SOURCE_URL];
+
+  const created: string[] = [];
+  for (const url of sources) {
+    const feedType = detectFeedType(url);
+    const jsRender = feedType === "web" && url.includes("treeofalpha.com");
+    const name =
+      url === DEFAULT_SOURCE_URL
+        ? DEFAULT_SOURCE_NAME
+        : url.replace(/^https?:\/\//, "").slice(0, 40);
+    const feed: Feed = {
+      id: genId(),
+      name,
+      type: feedType,
+      url,
+      keywords: keywords.length > 0 ? keywords : undefined,
+      schedule: DEFAULT_SCHEDULE,
+      jsRender,
+      enabled: true,
+    };
+    await saveFeed(feed);
+    created.push(
+      `👁️ ${feed.name} (${feed.type})\n   ID: ${feed.id}${keywords.length > 0 ? ` · Keywords: ${keywords.join(", ")}` : ""}`,
+    );
+  }
+
+  const cronHint = `\nTo activate scheduled checks, set up a cron:\n  openclaw cron add --name "news:<id>" --cron "${DEFAULT_SCHEDULE}" --message "Run check_news. Summarize and deliver any new items." --deliver --session isolated`;
+
+  return `News watch created!\n\n${created.join("\n\n")}\n\nSchedule: every 2 hours${cronHint}`;
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+export function registerNewsCommands(api: OpenClawPluginApi): void {
+  const cfg = () => (api.pluginConfig ?? {}) as PluginCfg;
+
+  api.registerCommand({
+    name: "news",
+    description: "Get latest news. Usage: /news [topic] [source-url]",
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const args = ctx.args?.trim() ?? "";
+      try {
+        const text = await handleNews(args, cfg());
+        return { text };
+      } catch (err) {
+        return { text: `Error fetching news: ${(err as Error).message}` };
+      }
+    },
+  });
+
+  api.registerCommand({
+    name: "newswatch",
+    description: "Watch for news and get pinged. Usage: /newswatch [topic] [source-url]",
+    acceptsArgs: true,
+    handler: async (ctx) => {
+      const args = ctx.args?.trim() ?? "";
+      try {
+        const text = await handleNewsWatch(args, cfg());
+        return { text };
+      } catch (err) {
+        return { text: `Error: ${(err as Error).message}` };
+      }
+    },
+  });
+}
