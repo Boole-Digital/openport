@@ -140,9 +140,18 @@ def fetch_page(url, mode="dynamic", timeout_ms=30000, scroll=False):
     # Scroll to load more content (only works with browser fetchers)
     if scroll and mode in ("stealthy", "dynamic"):
         try:
+            # First try scrolling a virtuoso container (react-virtuoso virtual scroll)
             page.execute_script(
                 """
                 async () => {
+                    const vs = document.querySelector('[data-testid="virtuoso-scroller"]');
+                    if (vs) {
+                        for (let i = 0; i < 15; i++) {
+                            vs.scrollTop += vs.clientHeight * 0.8;
+                            await new Promise(r => setTimeout(r, 500));
+                        }
+                        return;
+                    }
                     let prev = 0;
                     for (let i = 0; i < 15; i++) {
                         window.scrollTo(0, document.body.scrollHeight);
@@ -157,6 +166,92 @@ def fetch_page(url, mode="dynamic", timeout_ms=30000, scroll=False):
             pass  # scroll not supported by this fetcher
 
     return page
+
+
+def collect_virtual_scroll_items(page, item_selector, max_items=50):
+    """
+    Collect items from a react-virtuoso virtual scroll container.
+    Scrolls incrementally and gathers items by data-index to deduplicate.
+    """
+    collected = {}  # data-index -> item dict
+
+    for iteration in range(40):
+        elements = page.css(item_selector)
+        new_count = 0
+        for el in elements:
+            parent = el
+            # Walk up to find [data-index]
+            idx = -1
+            try:
+                # Try getting the parent with data-index via CSS from the page
+                # Scrapling elements don't have .parent easily, so extract from the element's context
+                idx_attr = el.attrib.get("data-index", "")
+                if not idx_attr:
+                    # The data-index is on a wrapper div above .contentWrapper
+                    # Use the element's text as a dedup key instead
+                    text = el.get_all_text(separator=" ").strip()
+                    idx = hash(text[:200])
+            except Exception:
+                continue
+
+            if idx_attr:
+                idx = int(idx_attr)
+
+            if idx in collected:
+                continue
+
+            text = el.get_all_text(separator=" ").strip()
+            if len(text) < 5:
+                continue
+
+            heading_el = _first(el.css("h1, h2, h3, h4, h5, h6"))
+            if not heading_el:
+                heading_el = _first(el.css("[class*='title']"))
+            title = heading_el.get_all_text().strip() if heading_el else ""
+
+            body = text.replace(title, "", 1).strip() if title else text
+            if len(body) < 20:
+                body = title or text
+
+            link_el = _first(el.css("a[href]"))
+            url = link_el.attrib.get("href", "") if link_el else ""
+
+            time_el = _first(el.css("time")) or _first(el.css("[class*='time']")) or _first(el.css("[class*='date']"))
+            published = ""
+            if time_el:
+                published = time_el.attrib.get("datetime", "") or time_el.get_all_text().strip()
+
+            collected[idx] = {
+                "title": title[:500],
+                "body": body[:3000],
+                "url": url,
+                "publishedAt": published,
+            }
+            new_count += 1
+
+        if len(collected) >= max_items:
+            break
+
+        if new_count == 0 and iteration > 2:
+            break
+
+        # Scroll the virtuoso container
+        try:
+            page.execute_script(
+                """
+                async () => {
+                    const vs = document.querySelector('[data-testid="virtuoso-scroller"]');
+                    if (vs) {
+                        vs.scrollTop += vs.clientHeight * 0.8;
+                        await new Promise(r => setTimeout(r, 400));
+                    }
+                }
+                """
+            )
+        except Exception:
+            break
+
+    return list(collected.values())[:max_items]
 
 
 def main():
@@ -197,6 +292,25 @@ def main():
         mode = "dynamic"  # default: full JS rendering via Playwright
 
     page = fetch_page(args.url, mode=mode, timeout_ms=args.timeout, scroll=args.scroll)
+
+    # Check for react-virtuoso virtual scroll — needs incremental collection
+    has_virtuoso = len(page.css('[data-testid="virtuoso-scroller"]')) > 0
+
+    if has_virtuoso and mode in ("stealthy", "dynamic"):
+        # Find the best item selector
+        item_selector = args.selector
+        if not item_selector:
+            for sel in [".contentWrapper", "[class*='contentWrapper']", "article", "[class*='card']"]:
+                if len(page.css(sel)) >= 2:
+                    item_selector = sel
+                    break
+        if item_selector:
+            items = collect_virtual_scroll_items(page, item_selector)
+            if items:
+                json.dump(items, sys.stdout)
+                sys.stdout.write("\n")
+                sys.stderr.write(f"scrapling: fetched {len(items)} items (virtual scroll) from {args.url}\n")
+                return
 
     if args.selector:
         elements = page.css(args.selector)
