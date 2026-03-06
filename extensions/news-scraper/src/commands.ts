@@ -9,7 +9,7 @@ import type { Feed, NewsItem, PluginCfg } from "./types.js";
 
 const DEFAULT_SOURCE_URL = "https://news.treeofalpha.com/";
 const DEFAULT_SOURCE_NAME = "Tree of Alpha";
-const DEFAULT_SCHEDULE = "0 */2 * * *";
+const DEFAULT_SCHEDULE = "*/5 * * * *";
 
 function genId(): string {
   return randomBytes(6).toString("hex");
@@ -195,7 +195,7 @@ async function handleNewsWatch(args: string, cfg: PluginCfg): Promise<string> {
 
   const cronHint = `\nTo activate scheduled checks, set up a cron:\n  openclaw cron add --name "news:<id>" --cron "${DEFAULT_SCHEDULE}" --message "Run check_news. Summarize and deliver any new items." --deliver --session isolated`;
 
-  return `News watch created!\n\n${created.join("\n\n")}\n\nSchedule: every 2 hours${cronHint}`;
+  return `News watch created!\n\n${created.join("\n\n")}\n\nSchedule: every 5 minutes${cronHint}`;
 }
 
 // ---------------------------------------------------------------------------
