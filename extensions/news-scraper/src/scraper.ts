@@ -140,6 +140,120 @@ async function scrollToBottom(
   }
 }
 
+type ExtractedItem = {
+  index: number;
+  title: string;
+  body: string;
+  url: string;
+  publishedAt: string;
+};
+
+/** Extract items currently visible in a virtual-scroll container, keyed by data-index. */
+function extractVisibleVirtualItems(selector: string) {
+  return (elements: Element[]) =>
+    elements.map((el) => {
+      const parent = el.closest("[data-index]");
+      const index = parent ? Number(parent.getAttribute("data-index")) : -1;
+
+      const heading = el.querySelector(
+        "h1, h2, h3, h4, h5, h6, [class*='title'], [class*='Title']",
+      );
+      const title = heading?.textContent?.trim() ?? "";
+
+      const fullText = (el.textContent ?? "").trim();
+      if (fullText.length < 5 || fullText.length > 3000) return null;
+      let body = title ? fullText.replace(title, "").trim() : fullText;
+      if (body.length < 20 || /^[👍👎+\-\d/,:\s\w]*$/.test(body)) {
+        body = title;
+      }
+
+      const link = el.querySelector("a[href]") as HTMLAnchorElement | null;
+      const url = link?.href ?? "";
+
+      const timeEl =
+        el.querySelector("time") ??
+        el.querySelector("[class*='time']") ??
+        el.querySelector("[class*='Time']") ??
+        el.querySelector("[class*='date']");
+      const publishedAt = timeEl?.getAttribute("datetime") ?? timeEl?.textContent?.trim() ?? "";
+
+      return { index, title, body, url, publishedAt };
+    });
+}
+
+/**
+ * Scrape a page that uses react-virtuoso or similar virtual-scroll library.
+ * Incrementally scrolls the container and collects items as they appear in the DOM.
+ */
+async function scrapeVirtualScroll(
+  page: import("playwright-core").Page,
+  baseUrl: string,
+  itemSelector: string,
+  maxItems = 200,
+): Promise<RawItem[]> {
+  const scroller = page.locator("[data-testid='virtuoso-scroller']");
+
+  // Try selecting "All results" if the dropdown exists
+  try {
+    const select = page.locator(".results-select select");
+    if ((await select.count()) > 0) {
+      await select.selectOption({ label: "All results" });
+      await page.waitForTimeout(1500);
+    }
+  } catch {
+    // dropdown not found — fine
+  }
+
+  const collected = new Map<number, ExtractedItem>();
+  let stableRounds = 0;
+  const maxIterations = 60;
+
+  for (let i = 0; i < maxIterations; i++) {
+    // Extract currently visible items
+    const visible = await page.$$eval(itemSelector, extractVisibleVirtualItems(itemSelector));
+    const validItems = visible.filter(
+      (item): item is ExtractedItem => item !== null && item.index >= 0 && item.title.length > 0,
+    );
+
+    let newCount = 0;
+    for (const item of validItems) {
+      if (!collected.has(item.index)) {
+        collected.set(item.index, item);
+        newCount++;
+      }
+    }
+
+    if (collected.size >= maxItems) break;
+
+    if (newCount === 0) {
+      stableRounds++;
+      if (stableRounds >= 3) break;
+    } else {
+      stableRounds = 0;
+    }
+
+    // Scroll the virtuoso container down
+    await scroller.evaluate((el) => {
+      el.scrollTop += el.clientHeight * 0.8;
+    });
+    await page.waitForTimeout(400);
+  }
+
+  // Convert to RawItems, sorted by index (newest first = index 0)
+  const sorted = Array.from(collected.values()).sort((a, b) => a.index - b.index);
+  return sorted.map((item) => ({
+    title: item.title,
+    body: item.body,
+    url:
+      item.url && item.url.startsWith("http")
+        ? item.url
+        : item.url
+          ? `${baseUrl}${item.url}`
+          : undefined,
+    publishedAt: item.publishedAt || undefined,
+  }));
+}
+
 async function scrapeWithPlaywright(url: string, timeout?: number): Promise<RawItem[]> {
   const pw = await import("playwright-core");
   const browser = await pw.chromium.launch({ headless: true });
@@ -147,10 +261,20 @@ async function scrapeWithPlaywright(url: string, timeout?: number): Promise<RawI
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: "networkidle", timeout: timeout ?? 30_000 });
 
-    // Scroll to load lazy/infinite-scroll content before extraction
+    // Check for react-virtuoso virtual scroll
+    const hasVirtuoso = (await page.locator("[data-testid='virtuoso-scroller']").count()) > 0;
+    if (hasVirtuoso) {
+      // Find the best item selector within the virtual list
+      const itemSelector = await findBestItemSelector(page);
+      if (itemSelector) {
+        const items = await scrapeVirtualScroll(page, url, itemSelector);
+        if (items.length > 1) return items;
+      }
+    }
+
+    // Standard path: scroll body and extract
     await scrollToBottom(page);
 
-    // Try to extract individual items from the rendered DOM
     const items = await extractRenderedItems(page, url);
     if (items.length > 1) return items;
 
@@ -162,21 +286,11 @@ async function scrapeWithPlaywright(url: string, timeout?: number): Promise<RawI
   }
 }
 
-/**
- * Extract individual news items from a JS-rendered page by finding
- * repeated structural elements in the DOM.
- */
-async function extractRenderedItems(
-  page: import("playwright-core").Page,
-  baseUrl: string,
-): Promise<RawItem[]> {
-  // Selectors for repeated news items, ordered by specificity.
-  // Uses CSS attribute selectors to match class substrings (classList may be space-separated).
+/** Find the best CSS selector for repeated news items on the page. */
+async function findBestItemSelector(page: import("playwright-core").Page): Promise<string | null> {
   const candidateSelectors = [
-    // Tree of Alpha-style news aggregators
     ".contentWrapper",
     "[class*='contentWrapper']",
-    // Generic patterns
     "article",
     "[class*='news-item']",
     "[class*='news_item']",
@@ -190,62 +304,68 @@ async function extractRenderedItems(
 
   for (const selector of candidateSelectors) {
     const count = await page.locator(selector).count();
-    if (count < 2) continue;
-
-    const items = await page.$$eval(selector, (elements) =>
-      elements.slice(0, 200).map((el) => {
-        // Extract headline from h1-h6 or title-classed element
-        const heading = el.querySelector(
-          "h1, h2, h3, h4, h5, h6, [class*='title'], [class*='Title']",
-        );
-        const title = heading?.textContent?.trim() ?? "";
-
-        // Extract body: full text minus the title, stripping vote/timestamp chrome
-        const fullText = (el.textContent ?? "").trim();
-        if (fullText.length < 5 || fullText.length > 3000) return null;
-        let body = title ? fullText.replace(title, "").trim() : fullText;
-        // If body is just vote counts / timestamps / noise, use the title as body
-        if (body.length < 20 || /^[👍👎+\-\d/,:\s\w]*$/.test(body)) {
-          body = title;
-        }
-
-        // Find links
-        const link = el.querySelector("a[href]") as HTMLAnchorElement | null;
-        const url = link?.href ?? "";
-
-        // Find timestamps
-        const timeEl =
-          el.querySelector("time") ??
-          el.querySelector("[class*='time']") ??
-          el.querySelector("[class*='Time']") ??
-          el.querySelector("[class*='date']");
-        const publishedAt = timeEl?.getAttribute("datetime") ?? timeEl?.textContent?.trim() ?? "";
-
-        return { title, body, url, publishedAt };
-      }),
-    );
-
-    const valid = items.filter(
-      (item): item is { title: string; body: string; url: string; publishedAt: string } =>
-        item !== null && (item.title.length > 0 || item.body.length > 0),
-    );
-
-    if (valid.length >= 2) {
-      return valid.map((item) => ({
-        title: item.title,
-        body: item.body,
-        url:
-          item.url && item.url.startsWith("http")
-            ? item.url
-            : item.url
-              ? `${baseUrl}${item.url}`
-              : undefined,
-        publishedAt: item.publishedAt || undefined,
-      }));
-    }
+    if (count >= 2) return selector;
   }
+  return null;
+}
 
-  return [];
+/**
+ * Extract individual news items from a JS-rendered page by finding
+ * repeated structural elements in the DOM (non-virtual-scroll path).
+ */
+async function extractRenderedItems(
+  page: import("playwright-core").Page,
+  baseUrl: string,
+): Promise<RawItem[]> {
+  const selector = await findBestItemSelector(page);
+  if (!selector) return [];
+
+  const items = await page.$$eval(selector, (elements) =>
+    elements.slice(0, 200).map((el) => {
+      const heading = el.querySelector(
+        "h1, h2, h3, h4, h5, h6, [class*='title'], [class*='Title']",
+      );
+      const title = heading?.textContent?.trim() ?? "";
+
+      const fullText = (el.textContent ?? "").trim();
+      if (fullText.length < 5 || fullText.length > 3000) return null;
+      let body = title ? fullText.replace(title, "").trim() : fullText;
+      if (body.length < 20 || /^[👍👎+\-\d/,:\s\w]*$/.test(body)) {
+        body = title;
+      }
+
+      const link = el.querySelector("a[href]") as HTMLAnchorElement | null;
+      const url = link?.href ?? "";
+
+      const timeEl =
+        el.querySelector("time") ??
+        el.querySelector("[class*='time']") ??
+        el.querySelector("[class*='Time']") ??
+        el.querySelector("[class*='date']");
+      const publishedAt = timeEl?.getAttribute("datetime") ?? timeEl?.textContent?.trim() ?? "";
+
+      return { title, body, url, publishedAt };
+    }),
+  );
+
+  const valid = items.filter(
+    (item): item is { title: string; body: string; url: string; publishedAt: string } =>
+      item !== null && (item.title.length > 0 || item.body.length > 0),
+  );
+
+  if (valid.length < 2) return [];
+
+  return valid.map((item) => ({
+    title: item.title,
+    body: item.body,
+    url:
+      item.url && item.url.startsWith("http")
+        ? item.url
+        : item.url
+          ? `${baseUrl}${item.url}`
+          : undefined,
+    publishedAt: item.publishedAt || undefined,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -490,10 +610,16 @@ async function scrapeWithScrapling(
     args.push("--timeout", String(opts.timeout));
   }
 
+  // First run creates a venv + pip installs ~200MB of deps — allow up to 5 minutes
+  const venvExists = await import("node:fs").then((fs) =>
+    fs.existsSync(path.join(path.dirname(scriptPath), ".scrapling-venv", "bin", "python3")),
+  );
+  const processTimeout = venvExists ? (opts?.timeout ?? 30_000) + 30_000 : 300_000;
+
   return new Promise<RawItem[]>((resolve, reject) => {
     const child = spawn("python3", args, {
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: (opts?.timeout ?? 30_000) + 30_000, // buffer for pip install on first run
+      timeout: processTimeout,
     });
 
     let stdout = "";
