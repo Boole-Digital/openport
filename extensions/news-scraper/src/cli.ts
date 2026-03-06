@@ -28,6 +28,11 @@ export function registerNewsCli(program: Command, api: OpenClawPluginApi): void 
     .option("--strategy <stem>", "Strategy stem to trigger on high-relevance news")
     .option("--strategy-prompt <prompt>", "Instruction for strategy trigger decision")
     .option("--js-render", "Use Playwright for JS rendering (type=web only)")
+    .option("--use-scrapling", "Use Scrapling (Python) instead of Playwright for scraping")
+    .option(
+      "--scrapling-selector <selector>",
+      "CSS selector for Scrapling item extraction (e.g. .contentWrapper)",
+    )
     .action(async (opts) => {
       const url = opts.url as string;
       const name = opts.name as string;
@@ -47,6 +52,8 @@ export function registerNewsCli(program: Command, api: OpenClawPluginApi): void 
         keywords,
         schedule: (opts.schedule as string) || DEFAULT_SCHEDULE,
         jsRender: opts.jsRender === true,
+        useScrapling: opts.useScrapling === true,
+        scraplingSelector: opts.scraplingSelector as string | undefined,
         strategy: opts.strategy as string | undefined,
         strategyPrompt: opts.strategyPrompt as string | undefined,
         enabled: true,
@@ -112,7 +119,7 @@ export function registerNewsCli(program: Command, api: OpenClawPluginApi): void 
     .option("--keywords <words>", "Additional comma-separated keywords to filter by")
     .action(async (opts) => {
       const cfg = (api.pluginConfig ?? {}) as PluginCfg;
-      const maxItems = cfg.maxItemsPerFeed ?? 20;
+      const maxItems = cfg.maxItemsPerFeed ?? 100;
       const feedId = opts.feed as string | undefined;
       const extraKeywords = opts.keywords
         ? (opts.keywords as string)

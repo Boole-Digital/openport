@@ -30,7 +30,7 @@ export function createNewsTool(api: OpenClawPluginApi) {
 
     async execute(_id: string, params: Record<string, unknown>) {
       const cfg = (api.pluginConfig ?? {}) as PluginCfg;
-      const maxItems = cfg.maxItemsPerFeed ?? 20;
+      const maxItems = cfg.maxItemsPerFeed ?? 100;
 
       // Resolve target feeds
       const feedId = typeof params.feedId === "string" ? params.feedId.trim() : undefined;

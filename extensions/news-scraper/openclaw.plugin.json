@@ -20,7 +20,7 @@
       },
       "maxItemsPerFeed": {
         "type": "number",
-        "description": "Max items to process per feed per check (default: 20)."
+        "description": "Max items to process per feed per check (default: 100)."
       },
       "playwrightTimeout": {
         "type": "number",

@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Feed, PluginCfg, RawItem } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -109,12 +112,49 @@ async function extractArticle(html: string, url: string): Promise<RawItem[]> {
 // Tier 3: Playwright (JS-rendered sites)
 // ---------------------------------------------------------------------------
 
+/**
+ * Scroll the page incrementally to trigger lazy/infinite-scroll loading.
+ * Stops when no new content appears or max iterations reached.
+ */
+async function scrollToBottom(
+  page: import("playwright-core").Page,
+  opts?: { maxIterations?: number; scrollDelayMs?: number },
+): Promise<void> {
+  const maxIterations = opts?.maxIterations ?? 15;
+  const scrollDelay = opts?.scrollDelayMs ?? 800;
+  let previousHeight = 0;
+  let stableCount = 0;
+
+  for (let i = 0; i < maxIterations; i++) {
+    const currentHeight = await page.evaluate(() => document.body.scrollHeight);
+    if (currentHeight === previousHeight) {
+      stableCount++;
+      if (stableCount >= 2) break;
+    } else {
+      stableCount = 0;
+    }
+    previousHeight = currentHeight;
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(scrollDelay);
+    await page.waitForLoadState("networkidle").catch(() => {});
+  }
+}
+
 async function scrapeWithPlaywright(url: string, timeout?: number): Promise<RawItem[]> {
   const pw = await import("playwright-core");
   const browser = await pw.chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: "networkidle", timeout: timeout ?? 30_000 });
+
+    // Scroll to load lazy/infinite-scroll content before extraction
+    await scrollToBottom(page);
+
+    // Try to extract individual items from the rendered DOM
+    const items = await extractRenderedItems(page, url);
+    if (items.length > 1) return items;
+
+    // Fallback: Readability single-article extraction
     const html = await page.content();
     return extractArticle(html, url);
   } finally {
@@ -122,32 +162,196 @@ async function scrapeWithPlaywright(url: string, timeout?: number): Promise<RawI
   }
 }
 
+/**
+ * Extract individual news items from a JS-rendered page by finding
+ * repeated structural elements in the DOM.
+ */
+async function extractRenderedItems(
+  page: import("playwright-core").Page,
+  baseUrl: string,
+): Promise<RawItem[]> {
+  // Selectors for repeated news items, ordered by specificity.
+  // Uses CSS attribute selectors to match class substrings (classList may be space-separated).
+  const candidateSelectors = [
+    // Tree of Alpha-style news aggregators
+    ".contentWrapper",
+    "[class*='contentWrapper']",
+    // Generic patterns
+    "article",
+    "[class*='news-item']",
+    "[class*='news_item']",
+    "[class*='feed-item']",
+    "[class*='feed_item']",
+    "[class*='story']",
+    "[class*='entry']",
+    "[class*='post-item']",
+    "[class*='card']",
+  ];
+
+  for (const selector of candidateSelectors) {
+    const count = await page.locator(selector).count();
+    if (count < 2) continue;
+
+    const items = await page.$$eval(selector, (elements) =>
+      elements.slice(0, 200).map((el) => {
+        // Extract headline from h1-h6 or title-classed element
+        const heading = el.querySelector(
+          "h1, h2, h3, h4, h5, h6, [class*='title'], [class*='Title']",
+        );
+        const title = heading?.textContent?.trim() ?? "";
+
+        // Extract body: full text minus the title, stripping vote/timestamp chrome
+        const fullText = (el.textContent ?? "").trim();
+        if (fullText.length < 5 || fullText.length > 3000) return null;
+        let body = title ? fullText.replace(title, "").trim() : fullText;
+        // If body is just vote counts / timestamps / noise, use the title as body
+        if (body.length < 20 || /^[👍👎+\-\d/,:\s\w]*$/.test(body)) {
+          body = title;
+        }
+
+        // Find links
+        const link = el.querySelector("a[href]") as HTMLAnchorElement | null;
+        const url = link?.href ?? "";
+
+        // Find timestamps
+        const timeEl =
+          el.querySelector("time") ??
+          el.querySelector("[class*='time']") ??
+          el.querySelector("[class*='Time']") ??
+          el.querySelector("[class*='date']");
+        const publishedAt = timeEl?.getAttribute("datetime") ?? timeEl?.textContent?.trim() ?? "";
+
+        return { title, body, url, publishedAt };
+      }),
+    );
+
+    const valid = items.filter(
+      (item): item is { title: string; body: string; url: string; publishedAt: string } =>
+        item !== null && (item.title.length > 0 || item.body.length > 0),
+    );
+
+    if (valid.length >= 2) {
+      return valid.map((item) => ({
+        title: item.title,
+        body: item.body,
+        url:
+          item.url && item.url.startsWith("http")
+            ? item.url
+            : item.url
+              ? `${baseUrl}${item.url}`
+              : undefined,
+        publishedAt: item.publishedAt || undefined,
+      }));
+    }
+  }
+
+  return [];
+}
+
 // ---------------------------------------------------------------------------
-// X/Twitter scraping (Playwright default, optional Scrapling sidecar)
+// X/Twitter scraping
 // ---------------------------------------------------------------------------
+
+/** Extract tweet ID from a single-tweet URL (x.com/user/status/ID). */
+function extractTweetId(url: string): string | null {
+  const m = url.match(/(?:x\.com|twitter\.com)\/[^/]+\/status\/(\d+)/i);
+  return m?.[1] ?? null;
+}
+
+/** Extract username from an X/Twitter URL. */
+function extractXUsername(url: string): string | null {
+  const m = url.match(/(?:x\.com|twitter\.com)\/([^/?#]+)/i);
+  const user = m?.[1];
+  if (!user || user === "search" || user === "hashtag" || user === "i") return null;
+  return user;
+}
+
+type FxTweetResponse = {
+  code: number;
+  tweet?: {
+    text?: string;
+    author?: { name?: string; screen_name?: string };
+    created_at?: string;
+    url?: string;
+    media?: { all?: Array<{ type?: string; url?: string }> };
+    quote?: { text?: string; author?: { name?: string; screen_name?: string }; url?: string };
+    replies?: number;
+    retweets?: number;
+    likes?: number;
+  };
+};
+
+/**
+ * Fetch a single tweet via the FxTwitter API (public, no auth required).
+ * Returns rich structured data including quoted tweets and engagement.
+ */
+async function fetchTweetViaFxTwitter(tweetId: string, username: string): Promise<RawItem[]> {
+  const apiUrl = `https://api.fxtwitter.com/${username}/status/${tweetId}`;
+  const res = await fetch(apiUrl, {
+    headers: { "User-Agent": "OpenClaw-News/1.0" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) return [];
+
+  const json = (await res.json()) as FxTweetResponse;
+  const tweet = json.tweet;
+  if (!tweet?.text) return [];
+
+  const author = tweet.author?.name ?? tweet.author?.screen_name ?? username;
+  const stats = [
+    tweet.likes != null ? `${tweet.likes} likes` : "",
+    tweet.retweets != null ? `${tweet.retweets} retweets` : "",
+    tweet.replies != null ? `${tweet.replies} replies` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  let body = tweet.text;
+  if (tweet.quote?.text) {
+    const quoteAuthor = tweet.quote.author?.name ?? tweet.quote.author?.screen_name ?? "";
+    body += `\n\nQuoting ${quoteAuthor}: ${tweet.quote.text}`;
+  }
+  if (stats) body += `\n\n${stats}`;
+
+  const items: RawItem[] = [
+    {
+      title: `@${tweet.author?.screen_name ?? username} (${author})`,
+      body,
+      url: tweet.url ?? `https://x.com/${username}/status/${tweetId}`,
+      publishedAt: tweet.created_at,
+    },
+  ];
+
+  return items;
+}
 
 export async function scrapeX(
   url: string,
   opts?: { scraplingUrl?: string; playwrightTimeout?: number },
 ): Promise<RawItem[]> {
+  // For single tweet URLs, use FxTwitter API (fast, reliable, no Playwright needed)
+  const tweetId = extractTweetId(url);
+  const username = extractXUsername(url);
+  if (tweetId && username) {
+    const items = await fetchTweetViaFxTwitter(tweetId, username).catch(() => []);
+    if (items.length > 0) return items;
+  }
+
   // If Scrapling sidecar is configured, delegate to it
   if (opts?.scraplingUrl) {
     return scrapeViaScraping(url, opts.scraplingUrl);
   }
 
-  // Default: Playwright-based X scraping
+  // Fallback: Playwright-based X scraping (for search/profile pages)
   const pw = await import("playwright-core");
   const browser = await pw.chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
-    // Set a realistic viewport and user agent
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(url, { waitUntil: "networkidle", timeout: opts?.playwrightTimeout ?? 30_000 });
 
-    // Wait for tweet articles to render
     await page.waitForSelector("article", { timeout: 10_000 }).catch(() => {});
 
-    // Extract tweets from the page
     const items = await page.$$eval("article", (articles) =>
       articles.slice(0, 30).map((el) => {
         const tweetText = el.querySelector("[data-testid='tweetText']")?.textContent ?? "";
@@ -259,11 +463,94 @@ async function extractTelegramMessages(html: string): Promise<RawItem[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Scrapling (Python child_process, optional alternative backend)
+// ---------------------------------------------------------------------------
+
+/** Resolve the path to the bundled scrapling_fetch.py script. */
+function scraplingScriptPath(): string {
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(currentDir, "scrapling_fetch.py");
+}
+
+/**
+ * Scrape a URL using the Python Scrapling library via child_process.
+ * Requires python3 on PATH; auto-installs scrapling pip package if missing.
+ */
+async function scrapeWithScrapling(
+  url: string,
+  opts?: { selector?: string; timeout?: number },
+): Promise<RawItem[]> {
+  const scriptPath = scraplingScriptPath();
+  const args = [scriptPath, url, "--dynamic", "--scroll"];
+
+  if (opts?.selector) {
+    args.push("--selector", opts.selector);
+  }
+  if (opts?.timeout) {
+    args.push("--timeout", String(opts.timeout));
+  }
+
+  return new Promise<RawItem[]>((resolve, reject) => {
+    const child = spawn("python3", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: (opts?.timeout ?? 30_000) + 30_000, // buffer for pip install on first run
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", (err) => {
+      reject(new Error(`Scrapling process failed to start: ${err.message}`));
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`Scrapling exited with code ${code}: ${stderr.slice(0, 500)}`));
+        return;
+      }
+      try {
+        const items = JSON.parse(stdout) as Array<{
+          title: string;
+          body: string;
+          url: string;
+          publishedAt: string;
+        }>;
+        resolve(
+          items.map((item) => ({
+            title: item.title ?? "",
+            body: item.body ?? "",
+            url: item.url || undefined,
+            publishedAt: item.publishedAt || undefined,
+          })),
+        );
+      } catch (err) {
+        reject(new Error(`Failed to parse Scrapling output: ${(err as Error).message}`));
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Unified entry point
 // ---------------------------------------------------------------------------
 
 export async function scrapeFeed(feed: Feed, cfg: PluginCfg): Promise<RawItem[]> {
   const timeout = cfg.playwrightTimeout;
+
+  // If feed opts into Scrapling, use Python backend
+  if (feed.useScrapling && feed.type === "web") {
+    return scrapeWithScrapling(feed.url, {
+      selector: feed.scraplingSelector,
+      timeout,
+    });
+  }
 
   switch (feed.type) {
     case "rss":

@@ -68,6 +68,8 @@ cd "${OPENPORT_DIR}"
 git pull origin main 2>&1
 pnpm install 2>&1
 pnpm build 2>&1
+# Ensure Playwright Chromium is installed for news-scraper JS rendering
+npx playwright install --with-deps chromium 2>&1 || echo "playwright install skipped"
 echo "openport build successful"
 `,
     300_000,

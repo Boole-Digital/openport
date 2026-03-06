@@ -20,23 +20,26 @@ function isUrl(token: string): boolean {
   return /^https?:\/\//i.test(token) || token.includes("t.me/") || token.includes("x.com/");
 }
 
-/** Parse args into URLs and keyword tokens. */
-function parseArgs(args: string): { urls: string[]; keywords: string[] } {
+/** Parse args into URLs, keyword tokens, and flags. */
+function parseArgs(args: string): { urls: string[]; keywords: string[]; useScrapling: boolean } {
   const tokens = args.split(/\s+/).filter(Boolean);
   const urls: string[] = [];
   const keywords: string[] = [];
+  let useScrapling = false;
   for (const t of tokens) {
-    if (isUrl(t)) {
+    if (t === "--scrapling" || t === "scrapling") {
+      useScrapling = true;
+    } else if (isUrl(t)) {
       urls.push(t.startsWith("http") ? t : `https://${t}`);
     } else {
       keywords.push(t);
     }
   }
-  return { urls, keywords };
+  return { urls, keywords, useScrapling };
 }
 
 /** Build a temporary Feed object for one-shot scraping. */
-function buildTempFeed(url: string, name: string, keywords: string[]): Feed {
+function buildTempFeed(url: string, name: string, keywords: string[], useScrapling = false): Feed {
   const feedType = detectFeedType(url);
   // Tree of Alpha is JS-rendered
   const jsRender = feedType === "web" && url.includes("treeofalpha.com");
@@ -47,6 +50,7 @@ function buildTempFeed(url: string, name: string, keywords: string[]): Feed {
     url,
     keywords: keywords.length > 0 ? keywords : undefined,
     jsRender,
+    useScrapling,
     enabled: true,
   };
 }
@@ -63,7 +67,7 @@ function formatItem(item: NewsItem): string {
 // ---------------------------------------------------------------------------
 
 async function handleNews(args: string, cfg: PluginCfg): Promise<string> {
-  const { urls, keywords } = parseArgs(args);
+  const { urls, keywords, useScrapling } = parseArgs(args);
 
   // Default to Tree of Alpha if no source specified
   const sources =
@@ -75,7 +79,7 @@ async function handleNews(args: string, cfg: PluginCfg): Promise<string> {
   const errors: string[] = [];
 
   for (const source of sources) {
-    const feed = buildTempFeed(source.url, source.name, keywords);
+    const feed = buildTempFeed(source.url, source.name, keywords, useScrapling);
     try {
       const rawItems = await scrapeFeed(feed, cfg);
       if (rawItems.length === 0) {
@@ -83,7 +87,7 @@ async function handleNews(args: string, cfg: PluginCfg): Promise<string> {
         continue;
       }
       const { items } = await summarizeItems(
-        rawItems.slice(0, cfg.maxItemsPerFeed ?? 20),
+        rawItems.slice(0, cfg.maxItemsPerFeed ?? 100),
         feed,
         cfg,
       );
@@ -105,26 +109,28 @@ async function handleNews(args: string, cfg: PluginCfg): Promise<string> {
   const order = { high: 0, medium: 1, low: 2 };
   allItems.sort((a, b) => (order[a.relevance ?? "low"] ?? 2) - (order[b.relevance ?? "low"] ?? 2));
 
-  // Filter by keywords if any (keep high-relevance items regardless)
+  // Filter by keywords — strict text match, don't trust LLM relevance ratings
   const filtered =
     keywords.length > 0
-      ? allItems.filter(
-          (item) =>
-            item.relevance === "high" ||
-            keywords.some(
-              (kw) =>
-                item.title.toLowerCase().includes(kw.toLowerCase()) ||
-                item.summary.toLowerCase().includes(kw.toLowerCase()),
-            ),
+      ? allItems.filter((item) =>
+          keywords.some(
+            (kw) =>
+              item.title.toLowerCase().includes(kw.toLowerCase()) ||
+              item.summary.toLowerCase().includes(kw.toLowerCase()),
+          ),
         )
       : allItems;
 
+  // If keyword filtering returned nothing, say so — don't dump unrelated items
+  if (keywords.length > 0 && filtered.length === 0) {
+    return `📰 No news matching "${keywords.join(", ")}" found in latest ${allItems.length} items.`;
+  }
   const display = filtered.length > 0 ? filtered : allItems.slice(0, 10);
 
   const sourceLabel = sources.length === 1 ? sources[0]!.name : `${sources.length} sources`;
   const keywordLabel = keywords.length > 0 ? ` (${keywords.join(", ")})` : "";
   const header = `📰 Latest News — ${sourceLabel}${keywordLabel}\n`;
-  const body = display.slice(0, 15).map(formatItem).join("\n\n");
+  const body = display.slice(0, 25).map(formatItem).join("\n\n");
   const footer = errors.length > 0 ? `\n\n⚠️ ${errors.join("; ")}` : "";
 
   return `${header}\n${body}${footer}`;
@@ -166,7 +172,7 @@ async function handleNewsWatch(args: string, cfg: PluginCfg): Promise<string> {
   }
 
   // /newswatch [urls...] [keywords...] — set up a new watch
-  const { urls, keywords } = parseArgs(args);
+  const { urls, keywords, useScrapling } = parseArgs(args);
   const sources = urls.length > 0 ? urls : [DEFAULT_SOURCE_URL];
 
   const created: string[] = [];
@@ -185,6 +191,7 @@ async function handleNewsWatch(args: string, cfg: PluginCfg): Promise<string> {
       keywords: keywords.length > 0 ? keywords : undefined,
       schedule: DEFAULT_SCHEDULE,
       jsRender,
+      useScrapling,
       enabled: true,
     };
     await saveFeed(feed);
@@ -207,7 +214,7 @@ export function registerNewsCommands(api: OpenClawPluginApi): void {
 
   api.registerCommand({
     name: "news",
-    description: "Get latest news. Usage: /news [topic] [source-url]",
+    description: "Get latest news. Usage: /news [topic] [source-url] [scrapling]",
     acceptsArgs: true,
     handler: async (ctx) => {
       const args = ctx.args?.trim() ?? "";

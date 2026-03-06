@@ -16,6 +16,10 @@ export type Feed = {
   schedule?: string;
   /** If true, use Playwright for JS rendering (applies to type "web"). */
   jsRender?: boolean;
+  /** Use Scrapling (Python) instead of Playwright for scraping. */
+  useScrapling?: boolean;
+  /** CSS selector for Scrapling to extract repeated items (e.g. ".contentWrapper"). */
+  scraplingSelector?: string;
   /** Optional strategy stem to trigger on high-relevance news. */
   strategy?: string;
   /** Optional prompt guiding the LLM's strategy trigger decision. */
