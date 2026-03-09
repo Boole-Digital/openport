@@ -257,11 +257,11 @@ function buildBalancesText(results: StateResult[]): string {
 
   for (const r of combined) {
     if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
+      lines.push(`${r.label}  ·  not configured`, "");
       continue;
     }
     if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
       continue;
     }
     const nonZero = Object.entries(r.balances).filter(
@@ -291,11 +291,11 @@ function buildPositionsText(results: StateResult[]): string {
   const lines: string[] = ["**My Positions**", ""];
   for (const r of results) {
     if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
+      lines.push(`${r.label}  ·  not configured`, "");
       continue;
     }
     if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
       continue;
     }
     const open = r.positions.filter((p) => p.size > 0);
@@ -337,11 +337,11 @@ function buildOrdersText(results: OrderResult[]): string {
   const lines: string[] = ["**My Open Orders**", ""];
   for (const r of results) {
     if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
+      lines.push(`${r.label}  ·  not configured`, "");
       continue;
     }
     if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
       continue;
     }
     if (r.orders.length === 0) {
@@ -374,11 +374,11 @@ function buildPredictionPositionsText(results: StateResult[]): string {
   const lines: string[] = ["**My Prediction Positions**", ""];
   for (const r of results) {
     if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
+      lines.push(`${r.label}  ·  not configured`, "");
       continue;
     }
     if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
       continue;
     }
     const positions = (r.positions as unknown as PredictionPosition[]).filter((p) => p.shares > 0);
@@ -414,11 +414,11 @@ function buildPredictionOrdersText(results: PredictionOrderResult[]): string {
   const lines: string[] = ["**My Prediction Orders**", ""];
   for (const r of results) {
     if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
+      lines.push(`${r.label}  ·  not configured`, "");
       continue;
     }
     if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
       continue;
     }
     if (r.orders.length === 0) {
@@ -487,9 +487,15 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
   const isPositions = body === "/mypositions" || body.startsWith("/mypositions ");
   const isOrders = body === "/myorders" || body.startsWith("/myorders ");
   const isPredictionPositions =
-    body === "/my_prediction_positions" || body.startsWith("/my_prediction_positions ");
+    body === "/mypredictionpositions" ||
+    body.startsWith("/mypredictionpositions ") ||
+    body === "/my_prediction_positions" ||
+    body.startsWith("/my_prediction_positions ");
   const isPredictionOrders =
-    body === "/my_prediction_orders" || body.startsWith("/my_prediction_orders ");
+    body === "/mypredictionorders" ||
+    body.startsWith("/mypredictionorders ") ||
+    body === "/my_prediction_orders" ||
+    body.startsWith("/my_prediction_orders ");
   if (!isBalances && !isPositions && !isOrders && !isPredictionPositions && !isPredictionOrders) {
     return null;
   }
@@ -501,8 +507,8 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
       : isOrders
         ? "/myorders"
         : isPredictionPositions
-          ? "/my_prediction_positions"
-          : "/my_prediction_orders";
+          ? "/mypredictionpositions"
+          : "/mypredictionorders";
   const unauthorized = rejectUnauthorizedCommand(params, label);
   if (unauthorized) {
     return unauthorized;
