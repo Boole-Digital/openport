@@ -703,6 +703,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "tools",
     }),
     defineChatCommand({
+      key: "my_prediction_positions",
+      nativeName: "my_prediction_positions",
+      description: "Show prediction market positions (Polymarket). Refreshes in place.",
+      textAlias: "/my_prediction_positions",
+      acceptsArgs: false,
+      category: "tools",
+    }),
+    defineChatCommand({
+      key: "my_prediction_orders",
+      nativeName: "my_prediction_orders",
+      description: "Show prediction market open orders (Polymarket). Refreshes in place.",
+      textAlias: "/my_prediction_orders",
+      acceptsArgs: false,
+      category: "tools",
+    }),
+    defineChatCommand({
       key: "mystrategies",
       nativeName: "mystrategies",
       description:
