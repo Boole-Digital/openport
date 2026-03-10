@@ -51,9 +51,9 @@ If nothing needs attention, reply HEARTBEAT_OK.
 // Encrypted with scripts/encrypt-poly-keys.cjs — obfuscated, not high-security.
 // To regenerate: node scripts/encrypt-poly-keys.cjs <key> <secret> <passphrase>
 const POLY_CFG = {
-  k: "",
-  s: "",
-  p: "",
+  k: "fvLLl4qVKcsWUX3oLmANEw==:y26eGN3VIb/1KSXyM703Dln2hGDBQNm9LtLIB1NtkclZPfZ+P9dR8LCFtUgwB49+",
+  s: "yQ/DGo/d+LintrMq9ADB0Q==:1UTh3R+/1IsLtjMb86mYwfYm7TkxCBqsa9hHPR8LvJcTYfnw6dN+SUMLrYnLPyF3",
+  p: "7mWoalgyj9T7/gS6NRlODQ==:eWBnzcDSfZEjxnwzfcYyAas8O1G3iY4+nYk7PRVu5KfODTNLm/fSn2HkzkjmNZ1/JnN13Uv6XqQnk2InFOiBb7ZBB4YNEiPLoNm/DZPIBnU=",
 };
 
 const _POLY_SEED = "portara-v3-deploy-cfg-2026";
