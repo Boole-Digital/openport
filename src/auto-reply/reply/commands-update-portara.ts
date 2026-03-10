@@ -45,8 +45,19 @@ GH_TOKEN=$(cat "${TOKEN_FILE}")
 
 cd "${AGENT_DIR}"
 git remote set-url origin "https://\${GH_TOKEN}@github.com/Boole-Digital/portara-agent.git"
-git pull origin main 2>&1
+
+# Back up user .env files before reset (they are git-tracked and would be overwritten)
+cp -f "${AGENT_DIR}/v3/.env" /tmp/_portara_v3_env.bak 2>/dev/null || true
+cp -f "${AGENT_DIR}/code-sync/.env" /tmp/_portara_cs_env.bak 2>/dev/null || true
+
+git fetch origin main 2>&1
+git reset --hard origin/main 2>&1
 git remote set-url origin "https://github.com/Boole-Digital/portara-agent.git"
+
+# Restore user .env files
+cp -f /tmp/_portara_v3_env.bak "${AGENT_DIR}/v3/.env" 2>/dev/null || true
+cp -f /tmp/_portara_cs_env.bak "${AGENT_DIR}/code-sync/.env" 2>/dev/null || true
+rm -f /tmp/_portara_v3_env.bak /tmp/_portara_cs_env.bak
 
 cd "${AGENT_DIR}/v3"
 npm install 2>&1
@@ -65,7 +76,8 @@ function buildOpenport(): Promise<{ ok: boolean; output: string }> {
     `
 set -e
 cd "${OPENPORT_DIR}"
-git pull origin main 2>&1
+git fetch origin main 2>&1
+git reset --hard origin/main 2>&1
 pnpm install 2>&1
 pnpm build 2>&1
 # Run post-update script from freshly pulled repo (if it exists)
