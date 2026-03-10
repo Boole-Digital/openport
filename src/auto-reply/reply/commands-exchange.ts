@@ -81,6 +81,7 @@ type StateResult =
       configured: true;
       balances: Record<string, number>;
       positions: Position[];
+      extras?: Record<string, unknown>;
     };
 
 type PredictionOrderResult =
@@ -109,7 +110,7 @@ function buildRunnerScript(
   let fetchBody: string;
   if (mode === "state") {
     fetchBody = `    const state = await ti.getExchangeState(id);
-    return { id, label, configured: true, balances: state.balances, positions: state.positions };`;
+    return { id, label, configured: true, balances: state.balances, positions: state.positions, extras: state.extras };`;
   } else if (mode === "orders") {
     fetchBody = `    const orders = await ti.getOpenOrders(id);
     return { id, label, configured: true, orders };`;
@@ -245,10 +246,18 @@ function buildBalancesText(results: StateResult[]): string {
     const hl = combined[hlIdx];
     const xyz = combined[xyzIdx];
     if (hl.configured && !("error" in hl) && xyz.configured && !("error" in xyz)) {
+      // For unified accounts, HL and xyz share the same collateral pool —
+      // use HL's balance only (xyz reports the same value, not additive).
+      const isUnified = hl.extras?.unified === true;
       combined[hlIdx] = {
         ...hl,
         label: "Hyperliquid / trade\u200b.xyz",
-        balances: { ...hl.balances, USD: (hl.balances.USD ?? 0) + (xyz.balances.USD ?? 0) },
+        balances: {
+          ...hl.balances,
+          USD: isUnified
+            ? (hl.balances.USD ?? 0)
+            : (hl.balances.USD ?? 0) + (xyz.balances.USD ?? 0),
+        },
       };
       merged[xyzIdx] = true;
     }
