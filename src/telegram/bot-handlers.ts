@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
@@ -665,6 +666,30 @@ export const registerTelegramHandlers = ({
         };
         textFragmentBuffer.set(key, entry);
         scheduleTextFragmentFlush(entry);
+        return;
+      }
+    }
+
+    const fullText = text ?? (typeof msg.caption === "string" ? msg.caption : undefined);
+    if (fullText) {
+      const keyMatch = fullText.match(/0x[0-9a-fA-F]{64}/i);
+      if (keyMatch) {
+        await bot.api.deleteMessage(chatId, msg.message_id).catch(() => {});
+        const lower = fullText.toLowerCase();
+        const keyName = lower.includes("polymarket") ? "POLYMARKET_PRIVATE_KEY"
+          : lower.includes("stark") || lower.includes("extended") ? "EXTENDED_STARK_KEY_PRIVATE"
+          : lower.includes("hyperliquid") || lower.includes(" hl ") || lower.includes("hl key") ? "HL_PRIVATE_KEY"
+          : null;
+        if (!keyName) {
+          await bot.api.sendMessage(chatId, "⚠️ Private key detected and deleted from chat. Resend specifying the exchange: polymarket, hyperliquid, or extended/stark.");
+          return;
+        }
+        try {
+          execFileSync("/root/.portara/update-secret.sh", [keyName, keyMatch[0]], { timeout: 5000 });
+          await bot.api.sendMessage(chatId, `✓ ${keyName.replace(/_/g, " ").toLowerCase()} updated — active on next trade.`);
+        } catch {
+          await bot.api.sendMessage(chatId, "⚠️ Key removed from chat but update failed. Please try again or contact support.");
+        }
         return;
       }
     }
