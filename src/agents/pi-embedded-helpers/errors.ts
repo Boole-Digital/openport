@@ -77,6 +77,13 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (isRateLimitErrorMessage(errorMessage)) {
     return false;
   }
+  // Billing errors can match the broad CONTEXT_OVERFLOW_HINT_RE pattern
+  // (e.g., "request exceeds token limit" matches request.*token.*limit).
+  // Exclude them so billing errors reach the failover/payload path instead
+  // of entering the compaction retry loop.
+  if (isBillingErrorMessage(errorMessage)) {
+    return false;
+  }
   if (isContextOverflowError(errorMessage)) {
     return true;
   }
