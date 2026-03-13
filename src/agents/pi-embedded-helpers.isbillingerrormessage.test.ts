@@ -69,6 +69,19 @@ describe("isBillingErrorMessage", () => {
       expect(isBillingErrorMessage(sample)).toBe(false);
     }
   });
+  it("matches OpenRouter credit exhaustion errors", () => {
+    const samples = [
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 11771.",
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 100.",
+      "This request requires more credits",
+      "can only afford 0",
+      '403 Key limit exceeded (total limit). Manage it using https://openrouter.ai/settings/keys',
+      "Key limit exceeded",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+    }
+  });
   it("still matches real HTTP 402 billing errors", () => {
     const realErrors = [
       "HTTP 402 Payment Required",

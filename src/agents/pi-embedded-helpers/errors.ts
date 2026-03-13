@@ -8,10 +8,11 @@ import type { FailoverReason } from "./types.js";
 const log = createSubsystemLogger("errors");
 
 export function formatBillingErrorMessage(provider?: string, model?: string): string {
-  const providerName = provider?.trim();
+  const providerName = provider?.trim() || "API provider";
   const modelName = model?.trim();
+  const providerLabel = modelName ? `${providerName} (${modelName})` : providerName;
   return (
-    `⚠️ You're out of ${providerName} credits!\n\n` +
+    `⚠️ You're out of ${providerLabel} credits!\n\n` +
     "To continue using premium AI models, either:\n" +
     "• Top up with a booster pack: https://launcher.portara.xyz/billing\n" +
     "• End your free trial to unlock your full credits"
@@ -439,6 +440,12 @@ export function formatAssistantErrorText(
     }
   }
 
+  // Billing must be checked before context overflow: some providers (e.g. OpenRouter)
+  // return 402 errors with token/size language that can match overflow heuristics.
+  if (isBillingErrorMessage(raw)) {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+  }
+
   if (isContextOverflowError(raw)) {
     return (
       "Context overflow: prompt too large for the model. " +
@@ -478,10 +485,6 @@ export function formatAssistantErrorText(
 
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
-  }
-
-  if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
@@ -590,6 +593,9 @@ const ERROR_PATTERNS = {
     "credit balance",
     "plans & billing",
     "insufficient balance",
+    "requires more credits",
+    "can only afford",
+    "key limit exceeded",
   ],
   auth: [
     /invalid[_ ]?api[_ ]?key/,

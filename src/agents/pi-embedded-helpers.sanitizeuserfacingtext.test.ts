@@ -63,7 +63,7 @@ describe("sanitizeUserFacingText", () => {
 
   it("rewrites billing error-shaped text with errorContext", () => {
     const text = "billing: please upgrade your plan";
-    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain("billing error");
+    expect(sanitizeUserFacingText(text, { errorContext: true })).toContain("credits");
   });
 
   it("sanitizes raw API error payloads", () => {
