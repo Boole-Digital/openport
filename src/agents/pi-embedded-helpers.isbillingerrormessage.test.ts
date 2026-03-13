@@ -69,6 +69,19 @@ describe("isBillingErrorMessage", () => {
       expect(isBillingErrorMessage(sample)).toBe(false);
     }
   });
+  it("matches OpenRouter credit exhaustion errors", () => {
+    const samples = [
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 11771.",
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 100.",
+      "This request requires more credits",
+      "can only afford 0",
+      "403 Key limit exceeded (total limit). Manage it using https://openrouter.ai/settings/keys",
+      "Key limit exceeded",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+    }
+  });
   it("still matches real HTTP 402 billing errors", () => {
     const realErrors = [
       "HTTP 402 Payment Required",
@@ -245,6 +258,20 @@ describe("isLikelyContextOverflowError", () => {
       "Context window too small: minimum is 1000 tokens",
     ];
     for (const sample of samples) {
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+
+  it("excludes billing errors that could match the broad hint regex", () => {
+    const samples = [
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 11771.",
+      "403 Key limit exceeded (total limit). Manage it using https://openrouter.ai/settings/keys",
+      "insufficient credits",
+      "HTTP 402 Payment Required",
+      "Your credit balance is too low to access the Anthropic API.",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
   });

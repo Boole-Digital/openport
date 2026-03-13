@@ -633,7 +633,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         model: "mock-rotated",
       });
       expect(thrown).toBeInstanceOf(Error);
-      expect((thrown as Error).message).toContain("openai (mock-rotated) returned a billing error");
+      expect((thrown as Error).message).toContain("openai (mock-rotated) credits");
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
     });
   });
