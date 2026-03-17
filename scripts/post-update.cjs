@@ -46,4 +46,26 @@ If nothing needs attention, reply HEARTBEAT_OK.
   console.log("[post-update] HEARTBEAT.md created");
 }
 
+// --- Ensure AGENTS.md has backtest-prompt reference ---
+const agentsFile = path.join(WORKSPACE, "AGENTS.md");
+const backtestRef =
+  "- **If the task involves backtesting →** read `portara-agent/backtest/backtest-prompt.md` before starting";
+if (fs.existsSync(agentsFile)) {
+  const lines = fs.readFileSync(agentsFile, "utf8").split("\n");
+  if (!lines.some((l) => l.includes("backtest-prompt"))) {
+    const idx = lines.findIndex((l) => l.includes("interface-prompt"));
+    if (idx !== -1) {
+      lines.splice(idx + 1, 0, backtestRef);
+    } else {
+      // No interface-prompt anchor — insert after "## Reference Prompts" header
+      const hdrIdx = lines.findIndex((l) => l.includes("Reference Prompts"));
+      if (hdrIdx !== -1) {
+        lines.splice(hdrIdx + 1, 0, backtestRef);
+      }
+    }
+    fs.writeFileSync(agentsFile, lines.join("\n"));
+    console.log("[post-update] AGENTS.md patched with backtest-prompt reference");
+  }
+}
+
 console.log("[post-update] openport post-update complete");
