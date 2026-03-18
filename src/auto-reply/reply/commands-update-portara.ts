@@ -45,8 +45,19 @@ GH_TOKEN=$(cat "${TOKEN_FILE}")
 
 cd "${AGENT_DIR}"
 git remote set-url origin "https://\${GH_TOKEN}@github.com/Boole-Digital/portara-agent.git"
-git pull origin main 2>&1
+
+# Back up user .env files before reset (they are git-tracked and would be overwritten)
+cp -f "${AGENT_DIR}/v3/.env" /tmp/_portara_v3_env.bak 2>/dev/null || true
+cp -f "${AGENT_DIR}/code-sync/.env" /tmp/_portara_cs_env.bak 2>/dev/null || true
+
+git fetch origin main 2>&1
+git reset --hard origin/main 2>&1
 git remote set-url origin "https://github.com/Boole-Digital/portara-agent.git"
+
+# Restore user .env files
+cp -f /tmp/_portara_v3_env.bak "${AGENT_DIR}/v3/.env" 2>/dev/null || true
+cp -f /tmp/_portara_cs_env.bak "${AGENT_DIR}/code-sync/.env" 2>/dev/null || true
+rm -f /tmp/_portara_v3_env.bak /tmp/_portara_cs_env.bak
 
 cd "${AGENT_DIR}/v3"
 npm install 2>&1
@@ -65,11 +76,14 @@ function buildOpenport(): Promise<{ ok: boolean; output: string }> {
     `
 set -e
 cd "${OPENPORT_DIR}"
-git pull origin main 2>&1
+git fetch origin main 2>&1
+git reset --hard origin/main 2>&1
 pnpm install 2>&1
 pnpm build 2>&1
 # Ensure Playwright Chromium is installed for news-scraper JS rendering
 npx playwright install --with-deps chromium 2>&1 || echo "playwright install skipped"
+# Run post-update script from freshly pulled repo (if it exists)
+[ -f "${OPENPORT_DIR}/scripts/post-update.cjs" ] && node "${OPENPORT_DIR}/scripts/post-update.cjs" 2>&1 || true
 echo "openport build successful"
 `,
     300_000,
@@ -159,37 +173,6 @@ export const handleUpdatePortaraCommand: CommandHandler = async (params, allowTe
     };
     return { shouldContinue: false, reply };
   }
-
-  // Step 2b: Ensure heartbeat + PM2 monitor config exists
-  await runScript(
-    `
-set -e
-# Set heartbeat config if not already present
-if ! openclaw config get agents.defaults.heartbeat.every >/dev/null 2>&1; then
-  openclaw config set agents.defaults.heartbeat.every 30m
-fi
-if ! openclaw config get agents.defaults.heartbeat.model >/dev/null 2>&1; then
-  openclaw config set agents.defaults.heartbeat.model openrouter/openrouter/auto
-fi
-# Set pm2Monitor if not already present
-if ! openclaw config get agents.defaults.heartbeat.pm2Monitor >/dev/null 2>&1; then
-  openclaw config set agents.defaults.heartbeat.pm2Monitor '{"enabled": true, "logLines": 50, "idleHours": 8}'
-fi
-
-# Ensure HEARTBEAT.md exists (required for heartbeat preflight)
-if [ ! -f "${WORKSPACE_DIR}/HEARTBEAT.md" ] || ! grep -q "HEARTBEAT_OK" "${WORKSPACE_DIR}/HEARTBEAT.md"; then
-  cat > "${WORKSPACE_DIR}/HEARTBEAT.md" << 'HBEOF'
-# Heartbeat
-
-PM2 error monitoring and idle check-ins are handled automatically in code.
-If nothing needs attention, reply HEARTBEAT_OK.
-HBEOF
-fi
-
-echo "heartbeat config updated"
-`,
-    30_000,
-  );
 
   // Step 3: Spawn detached restart (gateway stop + start --force)
   // This runs in a detached process so it survives the gateway shutdown.

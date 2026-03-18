@@ -11,14 +11,18 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 
 const execFileAsync = promisify(execFile);
 
-const EXCHANGES = [
+const PERP_EXCHANGES = [
   { id: "hyperliquid", label: "Hyperliquid" },
   { id: "extended", label: "Extended" },
   { id: "xyz", label: "trade\u200b.xyz" },
   { id: "cash", label: "Dreamcash" },
 ] as const;
 
-type ExchangeId = (typeof EXCHANGES)[number]["id"];
+const PREDICTION_EXCHANGES = [{ id: "polymarket", label: "Polymarket" }] as const;
+
+const ALL_EXCHANGES = [...PERP_EXCHANGES, ...PREDICTION_EXCHANGES];
+
+type ExchangeEntry = { id: string; label: string };
 
 type Position = {
   market: string;
@@ -41,33 +45,94 @@ type Order = {
   timestamp: number;
 };
 
+type PredictionPosition = {
+  marketId: string;
+  outcomeIndex: number;
+  outcomeName: string;
+  shares: number;
+  avgPrice: number;
+  currentPrice: number;
+  unrealizedPnl: number;
+  realizedPnl: number;
+  title?: string;
+  redeemable?: boolean;
+  mergeable?: boolean;
+};
+
+type PredictionOrder = {
+  orderId: string;
+  marketId: string;
+  outcomeIndex: number;
+  side: string;
+  price: number;
+  size: number;
+  filled: number;
+  timestamp: number | null;
+  title?: string;
+  outcomeName?: string;
+};
+
 type StateResult =
-  | { id: ExchangeId; label: string; configured: false }
-  | { id: ExchangeId; label: string; configured: true; error: string }
+  | { id: string; label: string; configured: false }
+  | { id: string; label: string; configured: true; error: string }
   | {
-      id: ExchangeId;
+      id: string;
       label: string;
       configured: true;
       balances: Record<string, number>;
       positions: Position[];
+      extras?: Record<string, unknown>;
     };
 
+type PredictionOrderResult =
+  | { id: string; label: string; configured: false }
+  | { id: string; label: string; configured: true; error: string }
+  | { id: string; label: string; configured: true; orders: PredictionOrder[] };
+
 type OrderResult =
-  | { id: ExchangeId; label: string; configured: false }
-  | { id: ExchangeId; label: string; configured: true; error: string }
-  | { id: ExchangeId; label: string; configured: true; orders: Order[] };
+  | { id: string; label: string; configured: false }
+  | { id: string; label: string; configured: true; error: string }
+  | { id: string; label: string; configured: true; orders: Order[] };
+
+type RunnerMode = "state" | "orders" | "prediction-orders";
 
 // Runs as an ESM temp script (.mjs) so it can import portara-agent's ESM libs.
 // cwd must be v3Dir so Extended SDK WASM resolves correctly.
-function buildRunnerScript(v3Dir: string, mode: "state" | "orders"): string {
+function buildRunnerScript(
+  v3Dir: string,
+  mode: RunnerMode,
+  exchanges: ReadonlyArray<ExchangeEntry>,
+): string {
   const tiPath = JSON.stringify(`${v3Dir}/libs/trading-interface.js`);
   const cfgPath = JSON.stringify(`${v3Dir}/libs/config.js`);
-  const fetchBody =
-    mode === "state"
-      ? `    const state = await ti.getExchangeState(id);
-    return { id, label, configured: true, balances: state.balances, positions: state.positions };`
-      : `    const orders = await ti.getOpenOrders(id);
+  const exchangesJson = JSON.stringify(exchanges.map((e) => ({ id: e.id, label: e.label })));
+
+  let fetchBody: string;
+  if (mode === "state") {
+    fetchBody = `    const state = await ti.getExchangeState(id);
+    return { id, label, configured: true, balances: state.balances, positions: state.positions, extras: state.extras };`;
+  } else if (mode === "orders") {
+    fetchBody = `    const orders = await ti.getOpenOrders(id);
     return { id, label, configured: true, orders };`;
+  } else {
+    // prediction-orders: fetch orders and enrich with market titles
+    fetchBody = `    const orders = await ti.getOpenOrders(id);
+    const marketIds = [...new Set(orders.map(o => o.marketId).filter(Boolean))];
+    const info = {};
+    await Promise.all(marketIds.map(async (mId) => {
+      try {
+        const m = await ti.fetchMarket(id, mId);
+        info[mId] = { title: m.title || m.question, outcomes: m.outcomes };
+      } catch {}
+    }));
+    const enriched = orders.map(o => ({
+      ...o,
+      title: info[o.marketId]?.title || undefined,
+      outcomeName: info[o.marketId]?.outcomes?.[o.outcomeIndex]?.name || undefined,
+    }));
+    return { id, label, configured: true, orders: enriched };`;
+  }
+
   return `
 import { TradingInterface } from ${tiPath};
 import { loadConfig } from ${cfgPath};
@@ -75,12 +140,7 @@ import { loadConfig } from ${cfgPath};
 const config = loadConfig();
 const ti = new TradingInterface();
 
-const EXCHANGES = [
-  { id: 'hyperliquid', label: 'Hyperliquid' },
-  { id: 'extended', label: 'Extended' },
-  { id: 'xyz', label: 'trade\u200b.xyz' },
-  { id: 'cash', label: 'Dreamcash' },
-];
+const EXCHANGES = ${exchangesJson};
 
 const results = await Promise.all(EXCHANGES.map(async ({ id, label }) => {
   if (!config[id]?.privateKey) {
@@ -101,7 +161,8 @@ process.stdout.write(JSON.stringify(results));
 
 async function fetchData<T>(
   v3Dir: string,
-  mode: "state" | "orders",
+  mode: RunnerMode,
+  exchanges: ReadonlyArray<ExchangeEntry>,
 ): Promise<{ results: T[]; error?: string }> {
   try {
     await access(v3Dir);
@@ -116,7 +177,7 @@ async function fetchData<T>(
   const tmpDir = await mkdtemp(path.join(tmpdir(), "portara-ex-"));
   const scriptPath = path.join(tmpDir, "runner.mjs");
   try {
-    await writeFile(scriptPath, buildRunnerScript(v3Dir, mode), "utf8");
+    await writeFile(scriptPath, buildRunnerScript(v3Dir, mode, exchanges), "utf8");
     const { stdout } = await execFileAsync("node", [scriptPath], {
       timeout: 20000,
       cwd: v3Dir,
@@ -167,6 +228,11 @@ function formatPnl(pnl: number): string {
   return `${sign}$${Math.abs(pnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function formatCents(decimal: number): string {
+  const cents = decimal * 100;
+  return `${cents.toFixed(1).replace(/\.0$/, "")}¢`;
+}
+
 function buildBalancesText(results: StateResult[]): string {
   const lines: string[] = ["**My Balances**", ""];
 
@@ -180,10 +246,18 @@ function buildBalancesText(results: StateResult[]): string {
     const hl = combined[hlIdx];
     const xyz = combined[xyzIdx];
     if (hl.configured && !("error" in hl) && xyz.configured && !("error" in xyz)) {
+      // For unified accounts, HL and xyz share the same collateral pool —
+      // use HL's balance only (xyz reports the same value, not additive).
+      const isUnified = hl.extras?.unified === true;
       combined[hlIdx] = {
         ...hl,
         label: "Hyperliquid / trade\u200b.xyz",
-        balances: { ...hl.balances, USD: (hl.balances.USD ?? 0) + (xyz.balances.USD ?? 0) },
+        balances: {
+          ...hl.balances,
+          USD: isUnified
+            ? (hl.balances.USD ?? 0)
+            : (hl.balances.USD ?? 0) + (xyz.balances.USD ?? 0),
+        },
       };
       merged[xyzIdx] = true;
     }
@@ -192,16 +266,20 @@ function buildBalancesText(results: StateResult[]): string {
 
   for (const r of combined) {
     if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
+      lines.push(`${r.label}  ·  not configured`, "");
       continue;
     }
     if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
       continue;
     }
-    // USDT0 is Hyperliquid's on-chain USDT used as Dreamcash margin — always 1:1 with USDC, skip it.
     const nonZero = Object.entries(r.balances).filter(
-      ([k, v]) => v !== 0 && !(r.id === "cash" && k === "USDT0"),
+      ([k, v]) =>
+        v !== 0 &&
+        // USDT0 is Hyperliquid's on-chain USDT used as Dreamcash margin — always 1:1 with USDC, skip it.
+        !(r.id === "cash" && k === "USDT0") &&
+        // Polymarket normalizes USDC → USD; skip the raw USDC/USDT duplicates.
+        !(r.id === "polymarket" && k !== "USD"),
     );
     if (nonZero.length === 0) {
       lines.push(`${r.label}  ·  no balances`);
@@ -222,11 +300,11 @@ function buildPositionsText(results: StateResult[]): string {
   const lines: string[] = ["**My Positions**", ""];
   for (const r of results) {
     if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
+      lines.push(`${r.label}  ·  not configured`, "");
       continue;
     }
     if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
       continue;
     }
     const open = r.positions.filter((p) => p.size > 0);
@@ -268,11 +346,11 @@ function buildOrdersText(results: OrderResult[]): string {
   const lines: string[] = ["**My Open Orders**", ""];
   for (const r of results) {
     if (!r.configured) {
-      lines.push(`${r.label}  ·  not configured`);
+      lines.push(`${r.label}  ·  not configured`, "");
       continue;
     }
     if ("error" in r) {
-      lines.push(`${r.label}  ·  error: ${r.error}`);
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
       continue;
     }
     if (r.orders.length === 0) {
@@ -295,6 +373,84 @@ function buildOrdersText(results: OrderResult[]): string {
       lines.push(
         `  ${side}  ${o.market}  ${qty}  @ $${formatPrice(o.price)}  ≈ $${formatUsd(o.size * o.price)}`,
       );
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
+}
+
+function buildPredictionPositionsText(results: StateResult[]): string {
+  const lines: string[] = ["**My Prediction Positions**", ""];
+  for (const r of results) {
+    if (!r.configured) {
+      lines.push(`${r.label}  ·  not configured`, "");
+      continue;
+    }
+    if ("error" in r) {
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
+      continue;
+    }
+    const positions = (r.positions as unknown as PredictionPosition[]).filter((p) => p.shares > 0);
+    if (positions.length === 0) {
+      lines.push(`**${r.label}**`);
+      lines.push("  no open positions");
+      lines.push("");
+      continue;
+    }
+    lines.push(`**${r.label}**`);
+    for (let i = 0; i < positions.length; i++) {
+      const p = positions[i];
+      if (i > 0) {
+        lines.push("");
+      }
+      const title = p.title || p.marketId;
+      const outcome = p.outcomeName || (p.outcomeIndex === 0 ? "Yes" : "No");
+      lines.push(`  ${title}`);
+      const details = [
+        `${outcome}  ${formatAmount(p.shares)} shares`,
+        `avg ${formatCents(p.avgPrice)}`,
+        `now ${formatCents(p.currentPrice)}`,
+        `PnL ${formatPnl(p.unrealizedPnl)}`,
+      ];
+      lines.push(`    ${details.join("  ·  ")}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
+}
+
+function buildPredictionOrdersText(results: PredictionOrderResult[]): string {
+  const lines: string[] = ["**My Prediction Orders**", ""];
+  for (const r of results) {
+    if (!r.configured) {
+      lines.push(`${r.label}  ·  not configured`, "");
+      continue;
+    }
+    if ("error" in r) {
+      lines.push(`${r.label}  ·  error: ${r.error}`, "");
+      continue;
+    }
+    if (r.orders.length === 0) {
+      lines.push(`**${r.label}**`);
+      lines.push("  no open orders");
+      lines.push("");
+      continue;
+    }
+    lines.push(`**${r.label}**`);
+    for (let i = 0; i < r.orders.length; i++) {
+      if (i > 0) {
+        lines.push("");
+      }
+      const o = r.orders[i];
+      const side = o.side === "buy" ? "BUY " : "SELL";
+      const outcome = o.outcomeName || (o.outcomeIndex === 0 ? "Yes" : "No");
+      const priceCents = `${o.price.toFixed(1).replace(/\.0$/, "")}¢`;
+      const qty =
+        o.filled > 0
+          ? `${formatAmount(o.filled)}/${formatAmount(o.size)} filled`
+          : formatAmount(o.size);
+      const titlePart = o.title ? `  —  ${o.title}` : "";
+      lines.push(`  ${side}  ${qty} ${outcome}  @ ${priceCents}${titlePart}`);
     }
     lines.push("");
   }
@@ -339,11 +495,29 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
   const isBalances = body === "/mybalances" || body.startsWith("/mybalances ");
   const isPositions = body === "/mypositions" || body.startsWith("/mypositions ");
   const isOrders = body === "/myorders" || body.startsWith("/myorders ");
-  if (!isBalances && !isPositions && !isOrders) {
+  const isPredictionPositions =
+    body === "/mypredictionpositions" ||
+    body.startsWith("/mypredictionpositions ") ||
+    body === "/my_prediction_positions" ||
+    body.startsWith("/my_prediction_positions ");
+  const isPredictionOrders =
+    body === "/mypredictionorders" ||
+    body.startsWith("/mypredictionorders ") ||
+    body === "/my_prediction_orders" ||
+    body.startsWith("/my_prediction_orders ");
+  if (!isBalances && !isPositions && !isOrders && !isPredictionPositions && !isPredictionOrders) {
     return null;
   }
 
-  const label = isBalances ? "/mybalances" : isPositions ? "/mypositions" : "/myorders";
+  const label = isBalances
+    ? "/mybalances"
+    : isPositions
+      ? "/mypositions"
+      : isOrders
+        ? "/myorders"
+        : isPredictionPositions
+          ? "/mypredictionpositions"
+          : "/mypredictionorders";
   const unauthorized = rejectUnauthorizedCommand(params, label);
   if (unauthorized) {
     return unauthorized;
@@ -376,7 +550,7 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
   }
 
   if (isOrders) {
-    const { results, error } = await fetchData<OrderResult>(v3Dir, "orders");
+    const { results, error } = await fetchData<OrderResult>(v3Dir, "orders", PERP_EXCHANGES);
     if (error) {
       return { shouldContinue: false, reply: { text: error } };
     }
@@ -386,7 +560,35 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
     };
   }
 
-  const { results, error } = await fetchData<StateResult>(v3Dir, "state");
+  if (isPredictionPositions) {
+    const { results, error } = await fetchData<StateResult>(v3Dir, "state", PREDICTION_EXCHANGES);
+    if (error) {
+      return { shouldContinue: false, reply: { text: error } };
+    }
+    return {
+      shouldContinue: false,
+      reply: buildReply(buildPredictionPositionsText(results), label, channel, editMessageId),
+    };
+  }
+
+  if (isPredictionOrders) {
+    const { results, error } = await fetchData<PredictionOrderResult>(
+      v3Dir,
+      "prediction-orders",
+      PREDICTION_EXCHANGES,
+    );
+    if (error) {
+      return { shouldContinue: false, reply: { text: error } };
+    }
+    return {
+      shouldContinue: false,
+      reply: buildReply(buildPredictionOrdersText(results), label, channel, editMessageId),
+    };
+  }
+
+  // /mybalances or /mypositions — fetch state
+  const exchanges = isBalances ? ALL_EXCHANGES : PERP_EXCHANGES;
+  const { results, error } = await fetchData<StateResult>(v3Dir, "state", exchanges);
   if (error) {
     return { shouldContinue: false, reply: { text: error } };
   }

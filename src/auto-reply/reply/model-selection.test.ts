@@ -266,7 +266,7 @@ describe("createModelSelectionState respects session model override", () => {
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
-  it("returns on when catalog model has reasoning true", async () => {
+  it("always returns off regardless of model reasoning capability", async () => {
     const { loadModelCatalog } = await import("../../agents/model-catalog.js");
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([
       { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },
@@ -280,7 +280,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
       model: "x-ai/grok-4.1-fast",
       hasModelDirective: false,
     });
-    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("off");
   });
 
   it("returns off when catalog model has no reasoning", async () => {

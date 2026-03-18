@@ -8,7 +8,6 @@ import {
   modelKey,
   normalizeProviderId,
   resolveModelRefFromString,
-  resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -401,16 +400,7 @@ export async function createModelSelectionState(params: {
   };
 
   const resolveDefaultReasoningLevel = async (): Promise<"on" | "off"> => {
-    let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
-    if (!catalogForReasoning || catalogForReasoning.length === 0) {
-      modelCatalog = await loadModelCatalog({ config: cfg });
-      catalogForReasoning = modelCatalog;
-    }
-    return resolveReasoningDefault({
-      provider,
-      model,
-      catalog: catalogForReasoning,
-    });
+    return "off";
   };
 
   return {

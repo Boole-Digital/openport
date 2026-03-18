@@ -130,15 +130,30 @@ function formatPosition(ap: HlAssetPosition): string {
   return `${emoji} ${dir}  ${formatSize(p.szi)} ${p.coin}  Entry ${formatPrice(p.entryPx)}  PnL ${pnlStr}${liq}`;
 }
 
-async function fetchAccountData(
-  address: string,
-): Promise<{ orders: HlOpenOrder[]; state: HlClearinghouseState; error?: string }> {
+async function fetchAccountData(address: string): Promise<{
+  orders: HlOpenOrder[];
+  state: HlClearinghouseState;
+  unifiedAccountValue?: number;
+  error?: string;
+}> {
   try {
-    const [orders, state] = await Promise.all([
+    const [orders, state, mode] = await Promise.all([
       hlPost<HlOpenOrder[]>({ type: "frontendOpenOrders", user: address }),
       hlPost<HlClearinghouseState>({ type: "clearinghouseState", user: address }),
+      hlPost<string>({ type: "userAbstraction", user: address }).catch(() => "default"),
     ]);
-    return { orders, state };
+    const unified = mode === "unifiedAccount" || mode === "portfolioMargin";
+    let unifiedAccountValue: number | undefined;
+    if (unified) {
+      const spot = await hlPost<{ balances: { coin: string; total: string }[] }>({
+        type: "spotClearinghouseState",
+        user: address,
+      }).catch(() => ({ balances: [] }));
+      unifiedAccountValue = (spot.balances ?? [])
+        .filter((b) => b.coin === "USDC" || b.coin === "USDH")
+        .reduce((sum, b) => sum + parseFloat(b.total || "0"), 0);
+    }
+    return { orders, state, unifiedAccountValue };
   } catch (err) {
     return { orders: [], state: {} as HlClearinghouseState, error: String(err) };
   }
@@ -149,6 +164,7 @@ function buildOrdersReply(
   state: HlClearinghouseState,
   channel: string,
   editMessageId?: string,
+  unifiedAccountValue?: number,
 ): ReplyPayload {
   const positions = (state.assetPositions ?? [])
     .filter((ap) => parseFloat(ap.position.szi) !== 0)
@@ -158,7 +174,10 @@ function buildOrdersReply(
         Math.abs(parseFloat(a.position.unrealizedPnl)),
     );
 
-  const accountValue = formatUSDC(state.marginSummary?.accountValue ?? "0");
+  const accountValue =
+    unifiedAccountValue != null
+      ? formatUSDC(String(unifiedAccountValue))
+      : formatUSDC(state.marginSummary?.accountValue ?? "0");
   const withdrawable = formatUSDC(state.withdrawable ?? "0");
   const margin = formatUSDC(state.crossMarginSummary?.totalMarginUsed ?? "0");
 
@@ -240,13 +259,13 @@ export const handleMyOrdersCommand: CommandHandler = async (params, allowTextCom
   const channel = params.command.channel;
   const editMessageId = params.ctx.TelegramEditMessageId;
 
-  const { orders, state, error } = await fetchAccountData(address);
+  const { orders, state, unifiedAccountValue, error } = await fetchAccountData(address);
   if (error) {
     return { shouldContinue: false, reply: { text: `Hyperliquid error: ${error}` } };
   }
 
   return {
     shouldContinue: false,
-    reply: buildOrdersReply(orders, state, channel, editMessageId),
+    reply: buildOrdersReply(orders, state, channel, editMessageId, unifiedAccountValue),
   };
 };

@@ -1,7 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
   formatRawAssistantErrorForUi,
@@ -62,23 +61,27 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly billing message for credit balance errors", () => {
     const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
     const result = formatAssistantErrorText(msg);
-    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(result).toContain("out of");
+    expect(result).toContain("credits");
   });
   it("returns a friendly billing message for HTTP 402 errors", () => {
     const msg = makeAssistantError("HTTP 402 Payment Required");
     const result = formatAssistantErrorText(msg);
-    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(result).toContain("out of");
+    expect(result).toContain("credits");
   });
   it("returns a friendly billing message for insufficient credits", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg);
-    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(result).toContain("out of");
+    expect(result).toContain("credits");
   });
   it("includes provider and assistant model in billing message when provider is given", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
     expect(result).toBe(formatBillingErrorMessage("Anthropic", "test-model"));
     expect(result).toContain("Anthropic");
+    expect(result).toContain("test-model");
     expect(result).not.toContain("API provider");
   });
   it("uses the active assistant model for billing message context", () => {
@@ -91,7 +94,24 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("API provider");
-    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(result).toBe(formatBillingErrorMessage(undefined, "test-model"));
+  });
+  it("returns billing message for OpenRouter 402 credit exhaustion", () => {
+    const msg = makeAssistantError(
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 11771.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("out of");
+    expect(result).toContain("credits");
+    expect(result).not.toContain("Context overflow");
+  });
+  it("returns billing message for OpenRouter 403 key limit exceeded", () => {
+    const msg = makeAssistantError(
+      "403 Key limit exceeded (total limit). Manage it using https://openrouter.ai/settings/keys",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("out of");
+    expect(result).toContain("credits");
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
