@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
-import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+import { callGatewayTool } from "../../../src/agents/tools/gateway.js";
+import type { OpenClawPluginApi, PluginCommandContext } from "../../../src/plugins/types.js";
 import { detectFeedType } from "./cli.js";
-import { diffItems } from "./differ.js";
-import { loadFeeds, loadFeedState, removeFeed, saveFeed, saveFeedState } from "./feeds.js";
+import { loadFeeds, loadFeedState, removeFeed, saveFeed } from "./feeds.js";
 import { scrapeFeed } from "./scraper.js";
 import { summarizeItems } from "./summarizer.js";
 import type { Feed, NewsItem, PluginCfg } from "./types.js";
@@ -141,7 +141,11 @@ async function handleNews(args: string, cfg: PluginCfg): Promise<string> {
 // /newswatch — set up or manage recurring news watches
 // ---------------------------------------------------------------------------
 
-async function handleNewsWatch(args: string, cfg: PluginCfg): Promise<string> {
+async function handleNewsWatch(
+  args: string,
+  cfg: PluginCfg,
+  ctx: PluginCommandContext,
+): Promise<string> {
   const tokens = args.split(/\s+/).filter(Boolean);
   const action = tokens[0]?.toLowerCase() ?? "";
 
@@ -169,6 +173,20 @@ async function handleNewsWatch(args: string, cfg: PluginCfg): Promise<string> {
     if (!feedId) return "Usage: /newswatch stop <id>\n\nUse /newswatch list to see feed IDs.";
     const ok = await removeFeed(feedId);
     if (!ok) return `Feed ${feedId} not found. Use /newswatch list to see active watches.`;
+    // Auto-remove the associated cron job
+    try {
+      const jobs = await callGatewayTool<{ id: string; name: string }[]>(
+        "cron.list",
+        {},
+        { includeDisabled: true },
+      );
+      const cronJob = (Array.isArray(jobs) ? jobs : []).find((j) => j.name === `news:${feedId}`);
+      if (cronJob) {
+        await callGatewayTool("cron.remove", {}, { id: cronJob.id });
+      }
+    } catch {
+      // Best-effort: feed is already removed, cron cleanup is non-critical
+    }
     return `Stopped watching feed ${feedId}.`;
   }
 
@@ -177,6 +195,7 @@ async function handleNewsWatch(args: string, cfg: PluginCfg): Promise<string> {
   const sources = urls.length > 0 ? urls : [DEFAULT_SOURCE_URL];
 
   const created: string[] = [];
+  const cronWarnings: string[] = [];
   for (const url of sources) {
     const feedType = detectFeedType(url);
     const jsRender = feedType === "web" && url.includes("treeofalpha.com");
@@ -196,14 +215,42 @@ async function handleNewsWatch(args: string, cfg: PluginCfg): Promise<string> {
       enabled: true,
     };
     await saveFeed(feed);
+    // Auto-create the cron job so the watch actually polls
+    try {
+      await callGatewayTool(
+        "cron.add",
+        {},
+        {
+          name: `news:${feed.id}`,
+          description: `News watch: ${feed.name}`,
+          enabled: true,
+          schedule: { kind: "cron", expr: feed.schedule ?? DEFAULT_SCHEDULE },
+          sessionTarget: "isolated",
+          payload: {
+            kind: "agentTurn",
+            message: `Run check_news for feed ${feed.id}. Summarize and deliver any new items.`,
+            thinking: "low",
+            timeoutSeconds: 300,
+          },
+          delivery: {
+            mode: "announce",
+            channel: ctx.channelId ?? ctx.channel,
+            to: ctx.from ?? ctx.senderId,
+          },
+        },
+      );
+    } catch {
+      cronWarnings.push(
+        `⚠️ Could not auto-schedule feed ${feed.id}. Run manually:\n  openclaw cron add --name "news:${feed.id}" --cron "${DEFAULT_SCHEDULE}" --message "Run check_news for feed ${feed.id}. Summarize and deliver any new items." --deliver --session isolated`,
+      );
+    }
     created.push(
       `👁️ ${feed.name} (${feed.type})\n   ID: ${feed.id}${keywords.length > 0 ? ` · Keywords: ${keywords.join(", ")}` : ""}`,
     );
   }
 
-  const cronHint = `\nTo activate scheduled checks, set up a cron:\n  openclaw cron add --name "news:<id>" --cron "${DEFAULT_SCHEDULE}" --message "Run check_news. Summarize and deliver any new items." --deliver --session isolated`;
-
-  return `News watch created!\n\n${created.join("\n\n")}\n\nSchedule: every 5 minutes${cronHint}`;
+  const warnings = cronWarnings.length > 0 ? `\n\n${cronWarnings.join("\n")}` : "";
+  return `News watch created!\n\n${created.join("\n\n")}\n\nSchedule: every 5 minutes${warnings}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +282,7 @@ export function registerNewsCommands(api: OpenClawPluginApi): void {
     handler: async (ctx) => {
       const args = ctx.args?.trim() ?? "";
       try {
-        const text = await handleNewsWatch(args, cfg());
+        const text = await handleNewsWatch(args, cfg(), ctx);
         return { text };
       } catch (err) {
         return { text: `Error: ${(err as Error).message}` };
