@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { callGatewayTool } from "../../../src/agents/tools/gateway.js";
+import { callGateway } from "../../../src/gateway/call.js";
 import type { OpenClawPluginApi, PluginCommandContext } from "../../../src/plugins/types.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../src/utils/message-channel.js";
 import { detectFeedType } from "./cli.js";
 import { loadFeeds, loadFeedState, removeFeed, saveFeed } from "./feeds.js";
 import { scrapeFeed } from "./scraper.js";
@@ -175,14 +176,20 @@ async function handleNewsWatch(
     if (!ok) return `Feed ${feedId} not found. Use /newswatch list to see active watches.`;
     // Auto-remove the associated cron job
     try {
-      const jobs = await callGatewayTool<{ id: string; name: string }[]>(
-        "cron.list",
-        {},
-        { includeDisabled: true },
-      );
+      const jobs = await callGateway<{ id: string; name: string }[]>({
+        method: "cron.list",
+        params: { includeDisabled: true },
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      });
       const cronJob = (Array.isArray(jobs) ? jobs : []).find((j) => j.name === `news:${feedId}`);
       if (cronJob) {
-        await callGatewayTool("cron.remove", {}, { id: cronJob.id });
+        await callGateway({
+          method: "cron.remove",
+          params: { id: cronJob.id },
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        });
       }
     } catch {
       // Best-effort: feed is already removed, cron cleanup is non-critical
@@ -217,10 +224,9 @@ async function handleNewsWatch(
     await saveFeed(feed);
     // Auto-create the cron job so the watch actually polls
     try {
-      await callGatewayTool(
-        "cron.add",
-        {},
-        {
+      await callGateway({
+        method: "cron.add",
+        params: {
           name: `news:${feed.id}`,
           description: `News watch: ${feed.name}`,
           enabled: true,
@@ -238,10 +244,12 @@ async function handleNewsWatch(
             to: ctx.from ?? ctx.senderId,
           },
         },
-      );
-    } catch {
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      });
+    } catch (err) {
       cronWarnings.push(
-        `⚠️ Could not auto-schedule feed ${feed.id}. Run manually:\n  openclaw cron add --name "news:${feed.id}" --cron "${DEFAULT_SCHEDULE}" --message "Run check_news for feed ${feed.id}. Summarize and deliver any new items." --deliver --session isolated`,
+        `⚠️ Could not auto-schedule feed ${feed.id}: ${(err as Error).message}\nRun manually:\n  openclaw cron add --name "news:${feed.id}" --cron "${DEFAULT_SCHEDULE}" --message "Run check_news for feed ${feed.id}. Summarize and deliver any new items." --deliver --session isolated`,
       );
     }
     created.push(
