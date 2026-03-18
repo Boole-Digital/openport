@@ -30,6 +30,7 @@ type Pm2Process = {
     restart_time: number;
     pm_out_log_path: string;
     pm_err_log_path: string;
+    pm_exec_path?: string;
   };
   monit: {
     memory: number;
@@ -211,23 +212,42 @@ async function fetchProcesses(): Promise<{ processes: Pm2Process[]; error?: stri
   }
 }
 
-// Map PM2 name to file stem: "strategy:hyperliquid:btc_mm" → "btc_mm_hyperliquid"
-// Convention: PM2 is strategy:<exchange>:<name>, files are <name>_<exchange>.js
-function extractStem(pm2Name: string): string {
-  const parts = pm2Name.split(":");
-  if (parts.length === 3 && parts[0] === "strategy") {
-    return `${parts[2]}_${parts[1]}`;
+// Extract the file stem from a PM2 process's script path.
+// e.g. "/root/.openclaw/workspace/portara-agent/v3/strategies/btc_does_nth.js" → "btc_does_nth"
+function scriptStem(proc: Pm2Process): string | undefined {
+  const execPath = proc.pm2_env.pm_exec_path;
+  if (!execPath) {
+    return undefined;
   }
-  return parts[parts.length - 1];
+  const filename = execPath.split("/").pop() ?? "";
+  return filename.endsWith(".js") ? filename.slice(0, -3) : undefined;
 }
 
-// Reverse: "btc_mm_hyperliquid" → "strategy:hyperliquid:btc_mm"
-function stemToPm2Name(stem: string): string {
-  const i = stem.lastIndexOf("_");
-  if (i > 0) {
-    return `strategy:${stem.slice(i + 1)}:${stem.slice(0, i)}`;
+// Match a PM2 process to a file stem.
+// Primary: script path lives in the strategies directory and filename matches.
+// Fallback: the PM2 name contains the stem (covers any naming convention).
+function processMatchesStem(proc: Pm2Process, stem: string): boolean {
+  // Primary: match by script path (most reliable)
+  const pathStem = scriptStem(proc);
+  if (pathStem === stem) {
+    return true;
   }
-  return `strategy:unknown:${stem}`;
+  // Fallback: stem appears as the last colon-segment or equals the full name
+  const name = proc.name;
+  if (name === stem) {
+    return true;
+  }
+  const lastColon = name.lastIndexOf(":");
+  if (lastColon !== -1 && name.slice(lastColon + 1) === stem) {
+    return true;
+  }
+  return false;
+}
+
+// Generate a PM2 name when starting a strategy via the slash command.
+// Uses the stem directly — the script path matching ensures we find it regardless.
+function stemToPm2Name(stem: string): string {
+  return stem;
 }
 
 async function fetchStrategyFiles(): Promise<string[]> {
@@ -242,23 +262,27 @@ async function fetchStrategyFiles(): Promise<string[]> {
 }
 
 // Source of truth: strategy files on disk, enriched with PM2 runtime status.
+// Matches PM2 processes to files by script path first, then by name.
 // Falls back to PM2 strategy:* processes if the directory is unavailable.
 async function fetchStrategies(): Promise<{ strategies: Strategy[]; error?: string }> {
   const [stems, { processes, error }] = await Promise.all([fetchStrategyFiles(), fetchProcesses()]);
 
+  // Build a map: file stem → matching PM2 process
   const pm2ByStem = new Map<string, Pm2Process>();
-  for (const proc of processes) {
-    if (proc.name.startsWith("strategy:")) {
-      pm2ByStem.set(extractStem(proc.name), proc);
+  for (const stem of stems) {
+    const proc = processes.find((p) => processMatchesStem(p, stem));
+    if (proc) {
+      pm2ByStem.set(stem, proc);
     }
   }
 
   const strategies = stems.map((stem) => ({ stem, process: pm2ByStem.get(stem) }));
 
+  // Fallback: no files on disk but PM2 has strategy processes
   if (strategies.length === 0 && processes.length > 0) {
     const fallback = processes
       .filter((p) => p.name.startsWith("strategy:"))
-      .map((p) => ({ stem: extractStem(p.name), process: p }));
+      .map((p) => ({ stem: scriptStem(p) ?? p.name, process: p }));
     if (fallback.length > 0) {
       return { strategies: fallback };
     }
@@ -267,11 +291,15 @@ async function fetchStrategies(): Promise<{ strategies: Strategy[]; error?: stri
   if (strategies.length === 0 && error) {
     return { strategies: [], error };
   }
+  // Surface PM2 errors even when files exist so the user knows status is stale
+  if (error) {
+    return { strategies, error };
+  }
   return { strategies };
 }
 
 function resolveProcess(processes: Pm2Process[], stem: string): Pm2Process | undefined {
-  return processes.find((p) => extractStem(p.name) === stem);
+  return processes.find((p) => processMatchesStem(p, stem));
 }
 
 // Reads the last `maxLines` non-empty lines from a file efficiently.
@@ -569,10 +597,15 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   // /mystrategies — list all
   if (!rest) {
     const { strategies, error } = await fetchStrategies();
-    if (error) {
+    if (error && strategies.length === 0) {
       return { shouldContinue: false, reply: { text: error } };
     }
-    return { shouldContinue: false, reply: buildListReply(strategies, channel, editMessageId) };
+    const reply = buildListReply(strategies, channel, editMessageId);
+    // Append PM2 warning so the user knows status may be stale
+    if (error) {
+      reply.text = `${reply.text}\n\n⚠️ ${error}`;
+    }
+    return { shouldContinue: false, reply };
   }
 
   return {
