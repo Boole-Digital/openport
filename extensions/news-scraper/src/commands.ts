@@ -142,11 +142,18 @@ async function handleNews(args: string, cfg: PluginCfg): Promise<string> {
 // /newswatch — set up or manage recurring news watches
 // ---------------------------------------------------------------------------
 
+/** Resolve the gateway auth token from the running config so callGateway can authenticate. */
+function resolveGatewayToken(ctx: PluginCommandContext): string | undefined {
+  const gw = ctx.config.gateway as { auth?: { token?: string } } | undefined;
+  return gw?.auth?.token;
+}
+
 async function handleNewsWatch(
   args: string,
   cfg: PluginCfg,
   ctx: PluginCommandContext,
 ): Promise<string> {
+  const gwToken = resolveGatewayToken(ctx);
   const tokens = args.split(/\s+/).filter(Boolean);
   const action = tokens[0]?.toLowerCase() ?? "";
 
@@ -179,6 +186,7 @@ async function handleNewsWatch(
       const jobs = await callGateway<{ id: string; name: string }[]>({
         method: "cron.list",
         params: { includeDisabled: true },
+        token: gwToken,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       });
@@ -187,6 +195,7 @@ async function handleNewsWatch(
         await callGateway({
           method: "cron.remove",
           params: { id: cronJob.id },
+          token: gwToken,
           clientName: GATEWAY_CLIENT_NAMES.CLI,
           mode: GATEWAY_CLIENT_MODES.CLI,
         });
@@ -244,6 +253,7 @@ async function handleNewsWatch(
             to: ctx.from ?? ctx.senderId,
           },
         },
+        token: gwToken,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       });
