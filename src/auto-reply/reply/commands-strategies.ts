@@ -245,9 +245,10 @@ function processMatchesStem(proc: Pm2Process, stem: string): boolean {
 }
 
 // Generate a PM2 name when starting a strategy via the slash command.
-// Uses the stem directly — the script path matching ensures we find it regardless.
+// Uses "strategy:<stem>" so the portara-agent recognises it as a strategy process
+// in `pm2 list`. processMatchesStem still matches via the last-colon-segment check.
 function stemToPm2Name(stem: string): string {
-  return stem;
+  return `strategy:${stem}`;
 }
 
 async function fetchStrategyFiles(): Promise<string[]> {
