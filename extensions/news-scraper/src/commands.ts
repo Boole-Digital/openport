@@ -183,14 +183,15 @@ async function handleNewsWatch(
     if (!ok) return `Feed ${feedId} not found. Use /newswatch list to see active watches.`;
     // Auto-remove the associated cron job
     try {
-      const jobs = await callGateway<{ id: string; name: string }[]>({
+      const res = await callGateway<{ jobs: { id: string; name: string }[] }>({
         method: "cron.list",
         params: { includeDisabled: true },
         token: gwToken,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       });
-      const cronJob = (Array.isArray(jobs) ? jobs : []).find((j) => j.name === `news:${feedId}`);
+      const jobList = res?.jobs ?? [];
+      const cronJob = jobList.find((j) => j.name === `news:${feedId}`);
       if (cronJob) {
         await callGateway({
           method: "cron.remove",
@@ -200,8 +201,8 @@ async function handleNewsWatch(
           mode: GATEWAY_CLIENT_MODES.CLI,
         });
       }
-    } catch {
-      // Best-effort: feed is already removed, cron cleanup is non-critical
+    } catch (err) {
+      return `Stopped watching feed ${feedId}.\n\n⚠️ Could not auto-remove cron job: ${(err as Error).message}\nManually remove with: openclaw cron list → openclaw cron remove <id>`;
     }
     return `Stopped watching feed ${feedId}.`;
   }
