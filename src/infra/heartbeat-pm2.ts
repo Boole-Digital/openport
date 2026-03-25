@@ -59,7 +59,8 @@ Rules:
 - Be brief — one or two sentences per fix.
 - If you can identify the root cause, state it directly.
 - If the error is transient (network timeouts, rate limits), say so and suggest retry/backoff config.
-- Do not repeat the error summary — the user already has it.`;
+- Do not repeat the error summary — the user already has it.
+- Do NOT use any tools (exec, process, write, read, etc.) — respond with text only.`;
 
 const IDLE_CHECKIN_PROMPT = `It has been over 8 hours since the user last interacted. Send ONE brief, friendly check-in message (1-2 sentences). Pick one of these:
 - An idea for an interesting trading strategy the user could build and deploy with Portara (e.g. grid trading, momentum scalping, mean reversion, funding-rate arb, cross-exchange spread).
@@ -174,6 +175,7 @@ async function handlePm2Errors(
         isHeartbeat: true,
         heartbeatModelOverride: primaryModel,
         suppressToolErrorWarnings: true,
+        timeoutOverrideSeconds: 90,
       },
       cfg,
     );
@@ -249,7 +251,7 @@ async function maybeIdleCheckIn(
   try {
     const reply = await getReplyFromConfig(
       checkInCtx,
-      { isHeartbeat: true, suppressToolErrorWarnings: true },
+      { isHeartbeat: true, suppressToolErrorWarnings: true, timeoutOverrideSeconds: 60 },
       cfg,
     );
 
