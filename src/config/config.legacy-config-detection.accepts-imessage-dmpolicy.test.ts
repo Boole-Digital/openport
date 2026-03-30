@@ -63,18 +63,15 @@ function expectInvalidIssuePath(config: unknown, expectedPath: string) {
   }
 }
 
-function expectRoutingAllowFromLegacySnapshot(
+function expectSnapshotInvalidRootKey(
   ctx: { snapshot: ConfigSnapshot; parsed: unknown },
-  expectedAllowFrom: string[],
+  key: string,
 ) {
   expect(ctx.snapshot.valid).toBe(false);
-  expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "routing.allowFrom")).toBe(true);
-  const parsed = ctx.parsed as {
-    routing?: { allowFrom?: string[] };
-    channels?: unknown;
-  };
-  expect(parsed.routing?.allowFrom).toEqual(expectedAllowFrom);
-  expect(parsed.channels).toBeUndefined();
+  expect(ctx.snapshot.legacyIssues).toEqual([]);
+  expect(ctx.snapshot.issues[0]?.path).toBe("");
+  expect(ctx.snapshot.issues[0]?.message).toContain(`"${key}"`);
+  expect((ctx.parsed as Record<string, unknown>)[key]).toBeTruthy();
 }
 
 describe("legacy config detection", () => {
@@ -206,30 +203,25 @@ describe("legacy config detection", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path === "agent.model")).toBe(true);
+      expect(res.issues[0]?.path).toBe("");
+      expect(res.issues[0]?.message).toContain('"agent"');
     }
   });
-  it("migrates telegram.requireMention to channels.telegram.groups.*.requireMention", async () => {
+  it("does not rewrite removed telegram.requireMention migrations", async () => {
     const res = migrateLegacyConfig({
       telegram: { requireMention: false },
     });
-    expect(res.changes).toContain(
-      'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
-    );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(
-      (res.config?.channels?.telegram as { requireMention?: boolean } | undefined)?.requireMention,
-    ).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
-  it("migrates messages.tts.enabled to messages.tts.auto", async () => {
+  it("does not rewrite removed messages.tts.enabled migrations", async () => {
     const res = migrateLegacyConfig({
       messages: { tts: { enabled: true } },
     });
-    expect(res.changes).toContain("Moved messages.tts.enabled → messages.tts.auto (always).");
-    expect(res.config?.messages?.tts?.auto).toBe("always");
-    expect(res.config?.messages?.tts?.enabled).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
-  it("migrates legacy model config to agent.models + model lists", async () => {
+  it("does not rewrite removed legacy model config migrations", async () => {
     const res = migrateLegacyConfig({
       agent: {
         model: "anthropic/claude-opus-4-5",
@@ -240,44 +232,35 @@ describe("legacy config detection", () => {
         modelAliases: { Opus: "anthropic/claude-opus-4-5" },
       },
     });
-
-    expect(res.config?.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
-    expect(res.config?.agents?.defaults?.model?.fallbacks).toEqual(["openai/gpt-4.1-mini"]);
-    expect(res.config?.agents?.defaults?.imageModel?.primary).toBe("openai/gpt-4.1-mini");
-    expect(res.config?.agents?.defaults?.imageModel?.fallbacks).toEqual([
-      "anthropic/claude-opus-4-5",
-    ]);
-    expect(res.config?.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]).toMatchObject({
-      alias: "Opus",
-    });
-    expect(res.config?.agents?.defaults?.models?.["openai/gpt-4.1-mini"]).toBeTruthy();
-    expect((res.config as { agent?: unknown } | undefined)?.agent).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
-  it("flags legacy config in snapshot", async () => {
+  it("rejects removed routing.allowFrom in snapshot", async () => {
     await withSnapshotForConfig({ routing: { allowFrom: ["+15555550123"] } }, async (ctx) => {
-      expectRoutingAllowFromLegacySnapshot(ctx, ["+15555550123"]);
+      expectSnapshotInvalidRootKey(ctx, "routing");
     });
   });
   it("flags top-level memorySearch as legacy in snapshot", async () => {
     await withSnapshotForConfig(
       { memorySearch: { provider: "local", fallback: "none" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.valid).toBe(true);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
       },
     );
   });
-  it("flags legacy provider sections in snapshot", async () => {
+  it("flags top-level heartbeat as legacy in snapshot", async () => {
+    await withSnapshotForConfig(
+      { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
+      async (ctx) => {
+        expect(ctx.snapshot.valid).toBe(true);
+        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      },
+    );
+  });
+  it("rejects removed legacy provider sections in snapshot", async () => {
     await withSnapshotForConfig({ whatsapp: { allowFrom: ["+1555"] } }, async (ctx) => {
-      expect(ctx.snapshot.valid).toBe(false);
-      expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "whatsapp")).toBe(true);
-
-      const parsed = ctx.parsed as {
-        channels?: unknown;
-        whatsapp?: unknown;
-      };
-      expect(parsed.channels).toBeUndefined();
-      expect(parsed.whatsapp).toBeTruthy();
+      expectSnapshotInvalidRootKey(ctx, "whatsapp");
     });
   });
   it("does not auto-migrate claude-cli auth profile mode on load", async () => {
@@ -310,9 +293,18 @@ describe("legacy config detection", () => {
       expect(parsed.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
     });
   });
-  it("flags routing.allowFrom in snapshot", async () => {
+  it("still flags memorySearch in snapshot under the shorter support window", async () => {
+    await withSnapshotForConfig(
+      { memorySearch: { provider: "local", fallback: "none" } },
+      async (ctx) => {
+        expect(ctx.snapshot.valid).toBe(true);
+        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
+      },
+    );
+  });
+  it("rejects removed routing.allowFrom in snapshot with other values", async () => {
     await withSnapshotForConfig({ routing: { allowFrom: ["+1666"] } }, async (ctx) => {
-      expectRoutingAllowFromLegacySnapshot(ctx, ["+1666"]);
+      expectSnapshotInvalidRootKey(ctx, "routing");
     });
   });
   it("rejects bindings[].match.provider on load", async () => {

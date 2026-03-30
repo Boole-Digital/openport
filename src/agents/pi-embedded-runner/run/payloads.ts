@@ -1,7 +1,8 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -67,6 +68,12 @@ function resolveToolErrorWarningPolicy(params: {
   if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
     return { showWarning: false, includeDetails };
   }
+  // sessions_send timeouts and errors are transient inter-session communication
+  // issues — the message may still have been delivered. Suppress warnings to
+  // prevent raw error text from leaking into the chat surface (#23989).
+  if (normalizedToolName === "sessions_send") {
+    return { showWarning: false, includeDetails };
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -96,12 +103,14 @@ export function buildEmbeddedRunPayloads(params: {
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
+  didSendDeterministicApprovalPrompt?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
   replyToId?: string;
   isError?: boolean;
+  isReasoning?: boolean;
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
@@ -110,6 +119,7 @@ export function buildEmbeddedRunPayloads(params: {
     text: string;
     media?: string[];
     isError?: boolean;
+    isReasoning?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -117,15 +127,19 @@ export function buildEmbeddedRunPayloads(params: {
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
+  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
-  const errorText = params.lastAssistant
-    ? formatAssistantErrorText(params.lastAssistant, {
-        cfg: params.config,
-        sessionKey: params.sessionKey,
-        provider: params.provider,
-        model: params.model,
-      })
-    : undefined;
+  const errorText =
+    params.lastAssistant && lastAssistantErrored
+      ? suppressAssistantArtifacts
+        ? undefined
+        : formatAssistantErrorText(params.lastAssistant, {
+            cfg: params.config,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            model: params.model,
+          })
+      : undefined;
   const rawErrorMessage = lastAssistantErrored
     ? params.lastAssistant?.errorMessage?.trim() || undefined
     : undefined;
@@ -176,12 +190,13 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
 
-  const reasoningText =
-    params.lastAssistant && params.reasoningLevel === "on"
+  const reasoningText = suppressAssistantArtifacts
+    ? ""
+    : params.lastAssistant && params.reasoningLevel === "on"
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
-    replyItems.push({ text: reasoningText });
+    replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
   const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
@@ -235,13 +250,14 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = (
-    params.assistantTexts.length
-      ? params.assistantTexts
-      : fallbackAnswerText
-        ? [fallbackAnswerText]
-        : []
-  ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerTexts = suppressAssistantArtifacts
+    ? []
+    : (params.assistantTexts.length
+        ? params.assistantTexts
+        : fallbackAnswerText
+          ? [fallbackAnswerText]
+          : []
+      ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {
@@ -321,10 +337,10 @@ export function buildEmbeddedRunPayloads(params: {
       audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
     .filter((p) => {
-      if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {
+      if (!hasOutboundReplyContent(p)) {
         return false;
       }
-      if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) {
+      if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {
         return false;
       }
       return true;

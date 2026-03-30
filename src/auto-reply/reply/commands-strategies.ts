@@ -3,7 +3,9 @@ import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { TelegramInlineButton, TelegramInlineButtons } from "../../telegram/button-types.js";
+import type { TelegramInlineButtons } from "@openclaw/telegram/api.js";
+
+type TelegramInlineButton = TelegramInlineButtons[number][number];
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -554,13 +556,29 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
     }
   }
 
+  // Helper: if we have a loading message to edit, edit it directly via Telegram API
+  const chatId = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
+  const editOrReturn = async (reply: ReplyPayload) => {
+    if (editMessageId && channel === "telegram" && chatId) {
+      const buttons = (reply.channelData?.telegram as { buttons?: TelegramInlineButtons })?.buttons;
+      try {
+        const { editMessageTelegram } = await import("@openclaw/telegram/runtime-api.js");
+        await editMessageTelegram(chatId, editMessageId, reply.text ?? "", {
+          cfg: params.cfg,
+          buttons,
+        });
+        return { shouldContinue: false } as const;
+      } catch {
+        // Edit failed — fall back to new message
+      }
+    }
+    return { shouldContinue: false, reply } as const;
+  };
+
   // select <name> — show detail view for one strategy
   const selectMatch = rest.match(/^select\s+(\S.*)$/);
   if (selectMatch) {
-    return {
-      shouldContinue: false,
-      reply: await buildSelectReply(selectMatch[1].trim(), channel, editMessageId),
-    };
+    return editOrReturn(await buildSelectReply(selectMatch[1].trim(), channel, editMessageId));
   }
 
   // logs <name> [lines]
@@ -570,7 +588,7 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
     const lines = logsMatch[2]
       ? Math.min(MAX_LOG_LINES, Math.max(1, Number.parseInt(logsMatch[2], 10)))
       : DEFAULT_LOG_LINES;
-    return { shouldContinue: false, reply: await buildLogsReply(name, lines, editMessageId) };
+    return editOrReturn(await buildLogsReply(name, lines, editMessageId));
   }
 
   // start|stop|restart <name>
@@ -578,10 +596,7 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   if (controlMatch) {
     const action = controlMatch[1] as "start" | "stop" | "restart";
     const name = controlMatch[2];
-    return {
-      shouldContinue: false,
-      reply: await controlStrategy(action, name, channel, editMessageId),
-    };
+    return editOrReturn(await controlStrategy(action, name, channel, editMessageId));
   }
 
   // work <name> — inject strategy filepath as hidden context into the agent's turn
@@ -602,11 +617,10 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
       return { shouldContinue: false, reply: { text: error } };
     }
     const reply = buildListReply(strategies, channel, editMessageId);
-    // Append PM2 warning so the user knows status may be stale
     if (error) {
       reply.text = `${reply.text}\n\n⚠️ ${error}`;
     }
-    return { shouldContinue: false, reply };
+    return editOrReturn(reply);
   }
 
   return {

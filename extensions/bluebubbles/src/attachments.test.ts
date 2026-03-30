@@ -1,8 +1,8 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import type { PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 import {
   BLUE_BUBBLES_PRIVATE_API_STATUS,
@@ -63,6 +63,33 @@ describe("downloadBlueBubblesAttachment", () => {
     mockFetch.mockReset();
     setBlueBubblesRuntime(runtimeStub);
   });
+
+  async function expectAttachmentTooLarge(params: { bufferBytes: number; maxBytes?: number }) {
+    const largeBuffer = new Uint8Array(params.bufferBytes);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(largeBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-large" };
+    await expect(
+      downloadBlueBubblesAttachment(attachment, {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
+      }),
+    ).rejects.toThrow("too large");
+  }
+
+  function mockSuccessfulAttachmentDownload(buffer = new Uint8Array([1])) {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(buffer.buffer),
+    });
+    return buffer;
+  }
 
   it("throws when guid is missing", async () => {
     const attachment: BlueBubblesAttachment = {};
@@ -141,12 +168,7 @@ describe("downloadBlueBubblesAttachment", () => {
   });
 
   it("encodes guid in URL", async () => {
-    const mockBuffer = new Uint8Array([1]);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
-    });
+    mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att/with/special chars" };
     await downloadBlueBubblesAttachment(attachment, {
@@ -175,38 +197,14 @@ describe("downloadBlueBubblesAttachment", () => {
   });
 
   it("throws when attachment exceeds max bytes", async () => {
-    const largeBuffer = new Uint8Array(10 * 1024 * 1024);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(largeBuffer.buffer),
+    await expectAttachmentTooLarge({
+      bufferBytes: 10 * 1024 * 1024,
+      maxBytes: 5 * 1024 * 1024,
     });
-
-    const attachment: BlueBubblesAttachment = { guid: "att-large" };
-    await expect(
-      downloadBlueBubblesAttachment(attachment, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-        maxBytes: 5 * 1024 * 1024,
-      }),
-    ).rejects.toThrow("too large");
   });
 
   it("uses default max bytes when not specified", async () => {
-    const largeBuffer = new Uint8Array(9 * 1024 * 1024);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(largeBuffer.buffer),
-    });
-
-    const attachment: BlueBubblesAttachment = { guid: "att-large" };
-    await expect(
-      downloadBlueBubblesAttachment(attachment, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      }),
-    ).rejects.toThrow("too large");
+    await expectAttachmentTooLarge({ bufferBytes: 9 * 1024 * 1024 });
   });
 
   it("uses attachment mimeType as fallback when response has no content-type", async () => {
@@ -250,12 +248,7 @@ describe("downloadBlueBubblesAttachment", () => {
   });
 
   it("resolves credentials from config when opts not provided", async () => {
-    const mockBuffer = new Uint8Array([1]);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
-    });
+    mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att-config" };
     const result = await downloadBlueBubblesAttachment(attachment, {
@@ -273,6 +266,67 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(calledUrl).toContain("config-server:5678");
     expect(calledUrl).toContain("password=config-password");
     expect(result.buffer).toEqual(new Uint8Array([1]));
+  });
+
+  it("passes ssrfPolicy with allowPrivateNetwork when config enables it", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-ssrf" };
+    await downloadBlueBubblesAttachment(attachment, {
+      cfg: {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            allowPrivateNetwork: true,
+          },
+        },
+      },
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("auto-enables private-network fetches for loopback serverUrl when allowPrivateNetwork is not set", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-no-ssrf" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://localhost:1234",
+      password: "test",
+      cfg: { channels: { bluebubbles: {} } },
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("auto-enables private-network fetches for private IP serverUrl when allowPrivateNetwork is not set", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-private-ip" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://192.168.1.5:1234",
+      password: "test",
+      cfg: { channels: { bluebubbles: {} } },
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("allowlists public serverUrl hostname when allowPrivateNetwork is not set", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-public-host" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "https://bluebubbles.example.com:1234",
+      password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["bluebubbles.example.com"] });
   });
 });
 
@@ -297,6 +351,14 @@ describe("sendBlueBubblesAttachment", () => {
     return Buffer.from(body).toString("utf8");
   }
 
+  function expectVoiceAttachmentBody() {
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).toContain('name="isAudioMessage"');
+    expect(bodyText).toContain("true");
+    return bodyText;
+  }
+
   it("marks voice memos when asVoice is true and mp3 is provided", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -312,10 +374,7 @@ describe("sendBlueBubblesAttachment", () => {
       opts: { serverUrl: "http://localhost:1234", password: "test" },
     });
 
-    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
-    const bodyText = decodeBody(body);
-    expect(bodyText).toContain('name="isAudioMessage"');
-    expect(bodyText).toContain("true");
+    const bodyText = expectVoiceAttachmentBody();
     expect(bodyText).toContain('filename="voice.mp3"');
   });
 
@@ -334,8 +393,7 @@ describe("sendBlueBubblesAttachment", () => {
       opts: { serverUrl: "http://localhost:1234", password: "test" },
     });
 
-    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
-    const bodyText = decodeBody(body);
+    const bodyText = expectVoiceAttachmentBody();
     expect(bodyText).toContain('filename="voice.mp3"');
     expect(bodyText).toContain('name="voice.mp3"');
   });
@@ -440,5 +498,95 @@ describe("sendBlueBubblesAttachment", () => {
     const bodyText = decodeBody(body);
     expect(bodyText).not.toContain('name="selectedMessageGuid"');
     expect(bodyText).not.toContain('name="partIndex"');
+  });
+
+  it("auto-creates a new chat when sending to a phone number with no existing chat", async () => {
+    // First call: resolveChatGuidForTarget queries chats, returns empty (no match)
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
+    // Second call: createChatForHandle creates new chat
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            data: { chatGuid: "iMessage;-;+15559876543", guid: "iMessage;-;+15559876543" },
+          }),
+        ),
+    });
+    // Third call: actual attachment send
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ data: { guid: "attach-msg-1" } })),
+    });
+
+    const result = await sendBlueBubblesAttachment({
+      to: "+15559876543",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    expect(result.messageId).toBe("attach-msg-1");
+    // Verify chat creation was called
+    const createCallBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(createCallBody.addresses).toEqual(["+15559876543"]);
+    // Verify attachment was sent to the newly created chat
+    const attachBody = mockFetch.mock.calls[2][1]?.body as Uint8Array;
+    const attachText = decodeBody(attachBody);
+    expect(attachText).toContain("iMessage;-;+15559876543");
+  });
+
+  it("retries chatGuid resolution after creating a chat with no returned guid", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ data: {} })),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [{ guid: "iMessage;-;+15557654321" }] }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ data: { guid: "attach-msg-2" } })),
+    });
+
+    const result = await sendBlueBubblesAttachment({
+      to: "+15557654321",
+      buffer: new Uint8Array([4, 5, 6]),
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    expect(result.messageId).toBe("attach-msg-2");
+    const createCallBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(createCallBody.addresses).toEqual(["+15557654321"]);
+    const attachBody = mockFetch.mock.calls[3][1]?.body as Uint8Array;
+    const attachText = decodeBody(attachBody);
+    expect(attachText).toContain("iMessage;-;+15557654321");
+  });
+
+  it("still throws for non-handle targets when chatGuid is not found", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
+
+    await expect(
+      sendBlueBubblesAttachment({
+        to: "chat_id:999",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "photo.jpg",
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      }),
+    ).rejects.toThrow("chatGuid not found");
   });
 });

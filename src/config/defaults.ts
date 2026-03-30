@@ -1,9 +1,16 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
-import { resolveTalkApiKey } from "./talk.js";
+import { resolveAgentModelPrimaryValue } from "./model-input.js";
+import {
+  LEGACY_TALK_PROVIDER_ID,
+  normalizeTalkConfig,
+  resolveActiveTalkProviderConfig,
+  resolveTalkApiKey,
+} from "./talk.js";
 import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
+import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type WarnState = { warned: boolean };
 
@@ -17,12 +24,13 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   sonnet: "anthropic/claude-sonnet-4-6",
 
   // OpenAI
-  gpt: "openai/gpt-5.2",
+  gpt: "openai/gpt-5.4",
   "gpt-mini": "openai/gpt-5-mini",
 
   // Google Gemini (3.x are preview ids in the catalog)
-  gemini: "google/gemini-3-pro-preview",
+  gemini: "google/gemini-3.1-pro-preview",
   "gemini-flash": "google/gemini-3-flash-preview",
+  "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
@@ -33,6 +41,14 @@ const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
 };
 const DEFAULT_MODEL_INPUT: ModelDefinitionConfig["input"] = ["text"];
 const DEFAULT_MODEL_MAX_TOKENS = 8192;
+const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
+  "devstral-medium-latest": 32_768,
+  "magistral-small": 40_000,
+  "mistral-large-latest": 16_384,
+  "mistral-medium-2508": 8_192,
+  "mistral-small-latest": 16_384,
+  "pixtral-large-latest": 32_768,
+} as const;
 
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
@@ -61,6 +77,24 @@ function resolveModelCost(
     cacheWrite:
       typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST.cacheWrite,
   };
+}
+
+export function resolveNormalizedProviderModelMaxTokens(params: {
+  providerId: string;
+  modelId: string;
+  contextWindow: number;
+  rawMaxTokens: number;
+}): number {
+  const clamped = Math.min(params.rawMaxTokens, params.contextWindow);
+  if (normalizeProviderId(params.providerId) !== "mistral" || clamped < params.contextWindow) {
+    return clamped;
+  }
+
+  const safeMaxTokens =
+    MISTRAL_SAFE_MAX_TOKENS_BY_MODEL[
+      params.modelId as keyof typeof MISTRAL_SAFE_MAX_TOKENS_BY_MODEL
+    ] ?? DEFAULT_MODEL_MAX_TOKENS;
+  return Math.min(safeMaxTokens, params.contextWindow);
 }
 
 function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefaultsMode | null {
@@ -162,21 +196,43 @@ export function applySessionDefaults(
 }
 
 export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
+  const normalized = normalizeTalkConfig(config);
   const resolved = resolveTalkApiKey();
   if (!resolved) {
-    return config;
+    return normalized;
   }
-  const existing = config.talk?.apiKey?.trim();
-  if (existing) {
-    return config;
+
+  const talk = normalized.talk;
+  const active = resolveActiveTalkProviderConfig(talk);
+  if (!active || active.provider !== LEGACY_TALK_PROVIDER_ID) {
+    return normalized;
   }
-  return {
-    ...config,
-    talk: {
-      ...config.talk,
-      apiKey: resolved,
-    },
+
+  const existingProviderApiKeyConfigured = hasConfiguredSecretInput(active?.config?.apiKey);
+  const existingLegacyApiKeyConfigured = hasConfiguredSecretInput(talk?.apiKey);
+  if (existingProviderApiKeyConfigured || existingLegacyApiKeyConfigured) {
+    return normalized;
+  }
+
+  const providerId = active.provider;
+  const providers = { ...talk?.providers };
+  const providerConfig = { ...providers[providerId], apiKey: resolved };
+  providers[providerId] = providerConfig;
+
+  const nextTalk = {
+    ...talk,
+    apiKey: resolved,
+    providers,
   };
+
+  return {
+    ...normalized,
+    talk: nextTalk,
+  };
+}
+
+export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawConfig {
+  return normalizeTalkConfig(config);
 }
 
 export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
@@ -232,7 +288,12 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
 
         const defaultMaxTokens = Math.min(DEFAULT_MODEL_MAX_TOKENS, contextWindow);
         const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
-        const maxTokens = Math.min(rawMaxTokens, contextWindow);
+        const maxTokens = resolveNormalizedProviderModelMaxTokens({
+          providerId,
+          modelId: raw.id,
+          contextWindow,
+          rawMaxTokens,
+        });
         if (raw.maxTokens !== maxTokens) {
           modelMutated = true;
         }
@@ -409,10 +470,19 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   if (authMode === "api_key") {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
+    const isAnthropicCacheRetentionTarget = (
+      parsed: { provider: string; model: string } | null | undefined,
+    ): parsed is { provider: string; model: string } =>
+      Boolean(
+        parsed &&
+        (parsed.provider === "anthropic" ||
+          (parsed.provider === "amazon-bedrock" &&
+            parsed.model.toLowerCase().includes("anthropic.claude"))),
+      );
 
     for (const [key, entry] of Object.entries(nextModels)) {
       const parsed = parseModelRef(key, "anthropic");
-      if (!parsed || parsed.provider !== "anthropic") {
+      if (!isAnthropicCacheRetentionTarget(parsed)) {
         continue;
       }
       const current = entry ?? {};
@@ -427,10 +497,12 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
       modelsMutated = true;
     }
 
-    const primary = resolvePrimaryModelRef(defaults.model?.primary ?? undefined);
+    const primary = resolvePrimaryModelRef(
+      resolveAgentModelPrimaryValue(defaults.model) ?? undefined,
+    );
     if (primary) {
       const parsedPrimary = parseModelRef(primary, "anthropic");
-      if (parsedPrimary?.provider === "anthropic") {
+      if (isAnthropicCacheRetentionTarget(parsedPrimary)) {
         const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
         const entry = nextModels[key];
         const current = entry ?? {};

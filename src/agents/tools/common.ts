@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { detectMime } from "../../media/mime.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
 // oxlint-disable-next-line typescript/no-explicit-any
 export type AnyAgentTool = AgentTool<any, unknown> & {
   ownerOnly?: boolean;
+  displaySummary?: string;
 };
 
 export type StringParamOptions = {
@@ -53,6 +55,10 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
   };
 }
 
+function readParamRaw(params: Record<string, unknown>, key: string): unknown {
+  return readSnakeCaseParamRaw(params, key);
+}
+
 export function readStringParam(
   params: Record<string, unknown>,
   key: string,
@@ -69,7 +75,7 @@ export function readStringParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, trim = true, label = key, allowEmpty = false } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   if (typeof raw !== "string") {
     if (required) {
       throw new ToolInputError(`${label} required`);
@@ -92,7 +98,7 @@ export function readStringOrNumberParam(
   options: { required?: boolean; label?: string } = {},
 ): string | undefined {
   const { required = false, label = key } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return String(raw);
   }
@@ -111,17 +117,17 @@ export function readStringOrNumberParam(
 export function readNumberParam(
   params: Record<string, unknown>,
   key: string,
-  options: { required?: boolean; label?: string; integer?: boolean } = {},
+  options: { required?: boolean; label?: string; integer?: boolean; strict?: boolean } = {},
 ): number | undefined {
-  const { required = false, label = key, integer = false } = options;
-  const raw = params[key];
+  const { required = false, label = key, integer = false, strict = false } = options;
+  const raw = readParamRaw(params, key);
   let value: number | undefined;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     value = raw;
   } else if (typeof raw === "string") {
     const trimmed = raw.trim();
     if (trimmed) {
-      const parsed = Number.parseFloat(trimmed);
+      const parsed = strict ? Number(trimmed) : Number.parseFloat(trimmed);
       if (Number.isFinite(parsed)) {
         value = parsed;
       }
@@ -152,7 +158,7 @@ export function readStringArrayParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, label = key } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   if (Array.isArray(raw)) {
     const values = raw
       .filter((entry) => typeof entry === "string")
@@ -209,16 +215,46 @@ export function readReactionParams(
   return { emoji, remove, isEmpty: !emoji };
 }
 
-export function jsonResult(payload: unknown): AgentToolResult<unknown> {
+export function stringifyToolPayload(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  try {
+    const encoded = JSON.stringify(payload, null, 2);
+    if (typeof encoded === "string") {
+      return encoded;
+    }
+  } catch {
+    // Fall through to String(payload) for non-serializable values.
+  }
+  return String(payload);
+}
+
+export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify(payload, null, 2),
+        text,
       },
     ],
-    details: payload,
+    details,
   };
+}
+
+export function failedTextResult<TDetails extends { status: "failed" }>(
+  text: string,
+  details: TDetails,
+): AgentToolResult<TDetails> {
+  return textResult(text, details);
+}
+
+export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
+  return textResult(stringifyToolPayload(payload), payload);
+}
+
+export function jsonResult(payload: unknown): AgentToolResult<unknown> {
+  return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
 export function wrapOwnerOnlyToolExecution(
@@ -246,19 +282,29 @@ export async function imageResult(params: {
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
   const content: AgentToolResult<unknown>["content"] = [
-    {
-      type: "text",
-      text: params.extraText ?? `MEDIA:${params.path}`,
-    },
+    ...(params.extraText ? [{ type: "text" as const, text: params.extraText }] : []),
     {
       type: "image",
       data: params.base64,
       mimeType: params.mimeType,
     },
   ];
+  const detailsMedia =
+    params.details?.media &&
+    typeof params.details.media === "object" &&
+    !Array.isArray(params.details.media)
+      ? (params.details.media as Record<string, unknown>)
+      : undefined;
   const result: AgentToolResult<unknown> = {
     content,
-    details: { path: params.path, ...params.details },
+    details: {
+      path: params.path,
+      ...params.details,
+      media: {
+        ...detailsMedia,
+        mediaUrl: params.path,
+      },
+    },
   };
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
