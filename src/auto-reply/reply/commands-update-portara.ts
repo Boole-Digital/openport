@@ -153,7 +153,7 @@ export const handleUpdatePortaraCommand: CommandHandler = async (params, allowTe
     }
   };
 
-  await sendStatus("\u23F3 Updating your agent... this may take a few minutes.");
+  await sendStatus("\u23F3 Updating your agent \u2014 this may take a few minutes");
 
   // Step 1: Update trading tools (portara-agent)
   const agentResult = await updatePortaraAgent();
