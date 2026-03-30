@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { TelegramInlineButtons } from "@openclaw/telegram/api.js";
-import { editMessageTelegram } from "@openclaw/telegram/runtime-api.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -578,6 +577,7 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
     const buttons = (replyPayload.channelData?.telegram as { buttons?: TelegramInlineButtons })
       ?.buttons;
     try {
+      const { editMessageTelegram } = await import("@openclaw/telegram/runtime-api.js");
       await editMessageTelegram(chatId, editMessageId, replyPayload.text ?? "", {
         cfg: params.cfg,
         buttons,
