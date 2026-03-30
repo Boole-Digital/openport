@@ -3,7 +3,9 @@ import { open, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { TelegramInlineButton, TelegramInlineButtons } from "../../telegram/button-types.js";
+import type { TelegramInlineButtons } from "@openclaw/telegram/api.js";
+
+type TelegramInlineButton = TelegramInlineButtons[number][number];
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";

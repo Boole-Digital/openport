@@ -1,4 +1,4 @@
-import type { TelegramInlineButtons } from "../../telegram/button-types.js";
+import type { TelegramInlineButtons } from "@openclaw/telegram/api.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";

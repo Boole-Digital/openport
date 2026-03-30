@@ -22,7 +22,7 @@
  * hardcoded in this module.
  */
 
-import { resolveAgentModelPrimary, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentEffectiveModelPrimary, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
@@ -144,15 +144,13 @@ async function handlePm2Errors(
     to: delivery.to,
     accountId: delivery.accountId,
     threadId: delivery.threadId,
-    agentId,
     payloads: [{ text: errorSummary }],
     deps: opts.deps,
     mirror: { sessionKey, agentId, text: errorSummary },
   });
 
   // Step 2: Call PRIMARY model (from config) for proposed fixes
-  const primaryModel =
-    resolveAgentModelPrimary(cfg, agentId) ?? cfg.agents?.defaults?.model?.primary;
+  const primaryModel = resolveAgentEffectiveModelPrimary(cfg, agentId);
   if (!primaryModel) {
     log.warn("pm2-monitor: no primary model configured, skipping fix proposal");
     return { handled: true };
@@ -189,7 +187,6 @@ async function handlePm2Errors(
         to: delivery.to,
         accountId: delivery.accountId,
         threadId: delivery.threadId,
-        agentId,
         payloads: [{ text: fixText }],
         deps: opts.deps,
         mirror: { sessionKey, agentId, text: fixText },
@@ -264,7 +261,6 @@ async function maybeIdleCheckIn(
         to: delivery.to,
         accountId: delivery.accountId,
         threadId: delivery.threadId,
-        agentId,
         payloads: [{ text }],
         deps: opts.deps,
         mirror: { sessionKey, agentId, text },
