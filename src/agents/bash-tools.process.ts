@@ -17,7 +17,7 @@ import {
 } from "./bash-process-registry.js";
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
-import { encodeKeySequence, encodePaste } from "./pty-keys.js";
+import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
@@ -331,7 +331,7 @@ export function createProcessTool(
             const deadline = Date.now() + pollWaitMs;
             while (!scopedSession.exited && Date.now() < deadline) {
               await new Promise((resolve) =>
-                setTimeout(resolve, Math.min(250, deadline - Date.now())),
+                setTimeout(resolve, Math.max(0, Math.min(250, deadline - Date.now()))),
               );
             }
           }
@@ -477,11 +477,21 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          const { data, warnings } = encodeKeySequence({
+          const request = {
             keys: params.keys,
             hex: params.hex,
             literal: params.literal,
-          });
+          };
+          if (resolved.session.cursorKeyMode === "unknown" && hasCursorModeSensitiveKeys(request)) {
+            return failText(
+              `Session ${params.sessionId} cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.`,
+            );
+          }
+          const cursorKeyMode =
+            resolved.session.cursorKeyMode === "unknown"
+              ? undefined
+              : resolved.session.cursorKeyMode;
+          const { data, warnings } = encodeKeySequence(request, cursorKeyMode);
           if (!data) {
             return {
               content: [

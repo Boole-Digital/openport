@@ -43,11 +43,7 @@ describe("parseBooleanValue", () => {
 });
 
 describe("isReasoningTagProvider", () => {
-  const cases: Array<{
-    name: string;
-    value: string | null | undefined;
-    expected: boolean;
-  }> = [
+  it.each([
     {
       name: "returns false for ollama - native reasoning field, no tags needed (#2279)",
       value: "ollama",
@@ -57,6 +53,16 @@ describe("isReasoningTagProvider", () => {
       name: "returns false for case-insensitive ollama",
       value: "Ollama",
       expected: false,
+    },
+    {
+      name: "returns true for google (gemini-api-key auth provider)",
+      value: "google",
+      expected: true,
+    },
+    {
+      name: "returns true for Google (case-insensitive)",
+      value: "Google",
+      expected: true,
     },
     { name: "returns true for google-gemini-cli", value: "google-gemini-cli", expected: true },
     {
@@ -72,13 +78,13 @@ describe("isReasoningTagProvider", () => {
     { name: "returns false for anthropic", value: "anthropic", expected: false },
     { name: "returns false for openai", value: "openai", expected: false },
     { name: "returns false for openrouter", value: "openrouter", expected: false },
-  ];
-
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(isReasoningTagProvider(testCase.value)).toBe(testCase.expected);
-    });
-  }
+  ] satisfies Array<{
+    name: string;
+    value: string | null | undefined;
+    expected: boolean;
+  }>)("$name", ({ value, expected }) => {
+    expect(isReasoningTagProvider(value)).toBe(expected);
+  });
 });
 
 describe("splitShellArgs", () => {
@@ -95,5 +101,11 @@ describe("splitShellArgs", () => {
   it("returns null for unterminated quotes", () => {
     expect(splitShellArgs(`echo "oops`)).toBeNull();
     expect(splitShellArgs(`echo 'oops`)).toBeNull();
+  });
+
+  it("stops at unquoted shell comments but keeps quoted hashes literal", () => {
+    expect(splitShellArgs(`echo hi # comment && whoami`)).toEqual(["echo", "hi"]);
+    expect(splitShellArgs(`echo "hi # still-literal"`)).toEqual(["echo", "hi # still-literal"]);
+    expect(splitShellArgs(`echo hi#tail`)).toEqual(["echo", "hi#tail"]);
   });
 });

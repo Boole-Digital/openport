@@ -1,4 +1,4 @@
-import { normalizeWhatsAppTarget } from "../../../whatsapp/normalize.js";
+import { normalizeWhatsAppTarget } from "../../../plugin-sdk/whatsapp-targets.js";
 import { looksLikeHandleOrPhoneTarget, trimMessagingTarget } from "./shared.js";
 
 export function normalizeWhatsAppMessagingTarget(raw: string): string | undefined {
@@ -7,6 +7,14 @@ export function normalizeWhatsAppMessagingTarget(raw: string): string | undefine
     return undefined;
   }
   return normalizeWhatsAppTarget(trimmed) ?? undefined;
+}
+
+export function normalizeWhatsAppAllowFromEntries(allowFrom: Array<string | number>): string[] {
+  return allowFrom
+    .map((entry) => String(entry).trim())
+    .filter((entry): entry is string => Boolean(entry))
+    .map((entry) => (entry === "*" ? entry : normalizeWhatsAppTarget(entry)))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 export function looksLikeWhatsAppTargetId(raw: string): boolean {

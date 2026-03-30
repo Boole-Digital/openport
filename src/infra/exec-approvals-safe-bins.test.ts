@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import {
+  makeMockCommandResolution,
+  makeMockExecutableResolution,
+  makePathEnv,
+  makeTempDir,
+} from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
   evaluateShellAllowlist,
@@ -82,6 +87,41 @@ describe("exec approvals safe bins", () => {
       label: "blocks sort external program flag",
     }),
     ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "--compress-prog",
+      takesValue: true,
+      label: "blocks sort denied flag abbreviations",
+    }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "--files0-fro",
+      takesValue: true,
+      label: "blocks sort denied flag abbreviations",
+    }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "--random-source",
+      takesValue: true,
+      label: "blocks sort filesystem-dependent flags",
+    }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "--temporary-directory",
+      takesValue: true,
+      label: "blocks sort filesystem-dependent flags",
+    }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "-T",
+      takesValue: true,
+      label: "blocks sort filesystem-dependent flags",
+    }),
+    ...buildDeniedFlagVariantCases({
       executableName: "grep",
       resolvedPath: "/usr/bin/grep",
       flag: "-R",
@@ -123,6 +163,13 @@ describe("exec approvals safe bins", () => {
       takesValue: true,
       label: "blocks wc file-list flag",
     }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "wc",
+      resolvedPath: "/usr/bin/wc",
+      flag: "--files0-fro",
+      takesValue: true,
+      label: "blocks wc denied flag abbreviations",
+    }),
   ];
 
   const cases: SafeBinCase[] = [
@@ -131,6 +178,24 @@ describe("exec approvals safe bins", () => {
       argv: ["jq", ".foo"],
       resolvedPath: "/usr/bin/jq",
       expected: true,
+    },
+    {
+      name: "blocks jq env builtin even when jq is explicitly opted in",
+      argv: ["jq", "env"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq $ENV builtin variable even when jq is explicitly opted in",
+      argv: ["jq", "$ENV"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq $ENV property access even when jq is explicitly opted in",
+      argv: ["jq", "($ENV).OPENAI_API_KEY"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
     },
     {
       name: "blocks safe bins with file args",
@@ -163,29 +228,48 @@ describe("exec approvals safe bins", () => {
       safeBins: ["grep"],
       executableName: "grep",
     },
+    {
+      name: "rejects unknown long options in safe-bin mode",
+      argv: ["sort", "--totally-unknown=1"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "rejects ambiguous long-option abbreviations in safe-bin mode",
+      argv: ["sort", "--f=1"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "rejects unknown short options in safe-bin mode",
+      argv: ["tr", "-S", "a", "b"],
+      resolvedPath: "/usr/bin/tr",
+      expected: false,
+      safeBins: ["tr"],
+      executableName: "tr",
+    },
   ];
 
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const cwd = testCase.cwd ?? makeTempDir();
-      testCase.setup?.(cwd);
-      const executableName = testCase.executableName ?? "jq";
-      const rawExecutable = testCase.rawExecutable ?? executableName;
-      const ok = isSafeBinUsage({
-        argv: testCase.argv,
-        resolution: {
-          rawExecutable,
-          resolvedPath: testCase.resolvedPath,
-          executableName,
-        },
-        safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
-      });
-      expect(ok).toBe(testCase.expected);
+  it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
+    const cwd = testCase.cwd ?? makeTempDir();
+    testCase.setup?.(cwd);
+    const executableName = testCase.executableName ?? "jq";
+    const rawExecutable = testCase.rawExecutable ?? executableName;
+    const ok = isSafeBinUsage({
+      argv: testCase.argv,
+      resolution: {
+        rawExecutable,
+        resolvedPath: testCase.resolvedPath,
+        executableName,
+      },
+      safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
     });
-  }
+    expect(ok).toBe(testCase.expected);
+  });
 
   it("supports injected trusted safe-bin dirs for tests/callers", () => {
     if (process.platform === "win32") {
@@ -262,7 +346,7 @@ describe("exec approvals safe bins", () => {
 
   it("does not include sort/grep in default safeBins", () => {
     const defaults = resolveSafeBins(undefined);
-    expect(defaults.has("jq")).toBe(true);
+    expect(defaults.has("jq")).toBe(false);
     expect(defaults.has("sort")).toBe(false);
     expect(defaults.has("grep")).toBe(false);
   });
@@ -356,11 +440,13 @@ describe("exec approvals safe bins", () => {
         {
           raw: "jq .foo",
           argv: ["jq", ".foo"],
-          resolution: {
-            rawExecutable: "jq",
-            resolvedPath: "/custom/bin/jq",
-            executableName: "jq",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "jq",
+              resolvedPath: "/custom/bin/jq",
+              executableName: "jq",
+            }),
+          }),
         },
       ],
     };
@@ -404,6 +490,23 @@ describe("exec approvals safe bins", () => {
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(false);
     expect(result.segmentSatisfiedBy).toEqual([null]);
-    expect(result.segments[0]?.resolution?.resolvedPath).toBe(fakeHead);
+    expect(result.segments[0]?.resolution?.execution.resolvedPath).toBe(fakeHead);
+  });
+
+  it("fails closed for semantic env wrappers in allowlist mode", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const result = evaluateShellAllowlist({
+      command: "env -S 'sh -c \"echo pwned\"' tr",
+      allowlist: [{ pattern: "/usr/bin/tr" }],
+      safeBins: normalizeSafeBins(["tr"]),
+      cwd: "/tmp",
+      platform: process.platform,
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentSatisfiedBy).toEqual([null]);
+    expect(result.segments[0]?.resolution?.policyBlocked).toBe(true);
   });
 });

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import type { CronEvent } from "./service.js";
+import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
 import type { CronJob } from "./types.js";
@@ -73,6 +73,10 @@ export function installCronTestHooks(options: {
 }) {
   beforeEach(() => {
     vi.useFakeTimers();
+    // Shared unit-thread workers run with isolate disabled, so leaked cron
+    // timers from a previous file can still sit in the fake-timer queue.
+    // Clear them before advancing time in the next test file.
+    vi.clearAllTimers();
     vi.setSystemTime(new Date(options.baseTimeIso ?? "2025-12-13T00:00:00.000Z"));
     options.logger.debug.mockClear();
     options.logger.info.mockClear();
@@ -81,6 +85,7 @@ export function installCronTestHooks(options: {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 }
@@ -140,6 +145,42 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   return { cron, enqueueSystemEvent, requestHeartbeatNow, finished };
 }
 
+export async function withCronServiceForTest(
+  params: {
+    makeStorePath: () => Promise<{ storePath: string; cleanup: () => Promise<void> }>;
+    logger: ReturnType<typeof createNoopLogger>;
+    cronEnabled: boolean;
+    runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
+  },
+  run: (context: {
+    cron: CronService;
+    enqueueSystemEvent: ReturnType<typeof vi.fn>;
+    requestHeartbeatNow: ReturnType<typeof vi.fn>;
+  }) => Promise<void>,
+): Promise<void> {
+  const store = await params.makeStorePath();
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeatNow = vi.fn();
+  const cron = new CronService({
+    cronEnabled: params.cronEnabled,
+    storePath: store.storePath,
+    log: params.logger,
+    enqueueSystemEvent,
+    requestHeartbeatNow,
+    runIsolatedAgentJob:
+      params.runIsolatedAgentJob ??
+      (vi.fn(async () => ({ status: "ok" as const, summary: "done" })) as never),
+  });
+
+  await cron.start();
+  try {
+    await run({ cron, enqueueSystemEvent, requestHeartbeatNow });
+  } finally {
+    cron.stop();
+    await store.cleanup();
+  }
+}
+
 export function createRunningCronServiceState(params: {
   storePath: string;
   log: ReturnType<typeof createNoopLogger>;
@@ -161,6 +202,24 @@ export function createRunningCronServiceState(params: {
     jobs: params.jobs,
   };
   return state;
+}
+
+export function disposeCronServiceState(state: { timer: NodeJS.Timeout | null }): void {
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+}
+
+export async function withCronServiceStateForTest<T>(
+  state: { timer: NodeJS.Timeout | null },
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    disposeCronServiceState(state);
+  }
 }
 
 export function createDeferred<T>() {

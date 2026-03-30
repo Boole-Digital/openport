@@ -27,6 +27,7 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
     activeTurnCalls: new Set(),
     transcriptWaiters: new Map(),
     maxDurationTimers: new Map(),
+    initialMessageInFlight: new Set(),
     ...overrides,
   };
 }
@@ -41,6 +42,7 @@ function createProvider(overrides: Partial<VoiceCallProvider> = {}): VoiceCallPr
     playTts: async () => {},
     startListening: async () => {},
     stopListening: async () => {},
+    getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
     ...overrides,
   };
 }
@@ -71,19 +73,34 @@ function createInboundInitiatedEvent(params: {
   };
 }
 
+function createRejectingInboundContext(): {
+  ctx: CallManagerContext;
+  hangupCalls: HangupCallInput[];
+} {
+  const hangupCalls: HangupCallInput[] = [];
+  const provider = createProvider({
+    hangupCall: async (input: HangupCallInput): Promise<void> => {
+      hangupCalls.push(input);
+    },
+  });
+  const ctx = createContext({
+    config: createInboundDisabledConfig(),
+    provider,
+  });
+  return { ctx, hangupCalls };
+}
+
+function requireFirstActiveCall(ctx: CallManagerContext) {
+  const call = [...ctx.activeCalls.values()][0];
+  if (!call) {
+    throw new Error("expected one active call");
+  }
+  return call;
+}
+
 describe("processEvent (functional)", () => {
   it("calls provider hangup when rejecting inbound call", () => {
-    const hangupCalls: HangupCallInput[] = [];
-    const provider = createProvider({
-      hangupCall: async (input: HangupCallInput): Promise<void> => {
-        hangupCalls.push(input);
-      },
-    });
-
-    const ctx = createContext({
-      config: createInboundDisabledConfig(),
-      provider,
-    });
+    const { ctx, hangupCalls } = createRejectingInboundContext();
     const event = createInboundInitiatedEvent({
       id: "evt-1",
       providerCallId: "prov-1",
@@ -118,16 +135,7 @@ describe("processEvent (functional)", () => {
   });
 
   it("calls hangup only once for duplicate events for same rejected call", () => {
-    const hangupCalls: HangupCallInput[] = [];
-    const provider = createProvider({
-      hangupCall: async (input: HangupCallInput): Promise<void> => {
-        hangupCalls.push(input);
-      },
-    });
-    const ctx = createContext({
-      config: createInboundDisabledConfig(),
-      provider,
-    });
+    const { ctx, hangupCalls } = createRejectingInboundContext();
     const event1 = createInboundInitiatedEvent({
       id: "evt-init",
       providerCallId: "prov-dup",
@@ -148,8 +156,12 @@ describe("processEvent (functional)", () => {
     processEvent(ctx, event2);
 
     expect(ctx.activeCalls.size).toBe(0);
-    expect(hangupCalls).toHaveLength(1);
-    expect(hangupCalls[0]?.providerCallId).toBe("prov-dup");
+    expect(hangupCalls).toEqual([
+      expect.objectContaining({
+        providerCallId: "prov-dup",
+        reason: "hangup-bot",
+      }),
+    ]);
   });
 
   it("updates providerCallId map when provider ID changes", () => {
@@ -178,7 +190,11 @@ describe("processEvent (functional)", () => {
       timestamp: now + 1,
     });
 
-    expect(ctx.activeCalls.get("call-1")?.providerCallId).toBe("call-uuid");
+    const activeCall = ctx.activeCalls.get("call-1");
+    if (!activeCall) {
+      throw new Error("expected active call after provider id change");
+    }
+    expect(activeCall.providerCallId).toBe("call-uuid");
     expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
     expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
   });
@@ -235,5 +251,127 @@ describe("processEvent (functional)", () => {
 
     expect(() => processEvent(ctx, event)).not.toThrow();
     expect(ctx.activeCalls.size).toBe(0);
+  });
+
+  it("auto-registers externally-initiated outbound-api calls with correct direction", () => {
+    const ctx = createContext();
+    const event: NormalizedEvent = {
+      id: "evt-external-1",
+      type: "call.initiated",
+      callId: "CA-external-123",
+      providerCallId: "CA-external-123",
+      timestamp: Date.now(),
+      direction: "outbound",
+      from: "+15550000000",
+      to: "+15559876543",
+    };
+
+    processEvent(ctx, event);
+
+    // Call should be registered in activeCalls and providerCallIdMap
+    expect(ctx.activeCalls.size).toBe(1);
+    const call = requireFirstActiveCall(ctx);
+    expect(ctx.providerCallIdMap.get("CA-external-123")).toBe(call.callId);
+    expect(call.providerCallId).toBe("CA-external-123");
+    expect(call.direction).toBe("outbound");
+    expect(call.from).toBe("+15550000000");
+    expect(call.to).toBe("+15559876543");
+  });
+
+  it("does not reject externally-initiated outbound calls even with disabled inbound policy", () => {
+    const { ctx, hangupCalls } = createRejectingInboundContext();
+    const event: NormalizedEvent = {
+      id: "evt-external-2",
+      type: "call.initiated",
+      callId: "CA-external-456",
+      providerCallId: "CA-external-456",
+      timestamp: Date.now(),
+      direction: "outbound",
+      from: "+15550000000",
+      to: "+15559876543",
+    };
+
+    processEvent(ctx, event);
+
+    // External outbound calls bypass inbound policy — they should be accepted
+    expect(ctx.activeCalls.size).toBe(1);
+    expect(hangupCalls).toHaveLength(0);
+    const call = requireFirstActiveCall(ctx);
+    expect(call.direction).toBe("outbound");
+  });
+
+  it("preserves inbound direction for auto-registered inbound calls", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-inbound-dir",
+      type: "call.initiated",
+      callId: "CA-inbound-789",
+      providerCallId: "CA-inbound-789",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+15550000000",
+    };
+
+    processEvent(ctx, event);
+
+    expect(ctx.activeCalls.size).toBe(1);
+    const call = requireFirstActiveCall(ctx);
+    expect(call.direction).toBe("inbound");
+  });
+
+  it("deduplicates by dedupeKey even when event IDs differ", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    ctx.activeCalls.set("call-dedupe", {
+      callId: "call-dedupe",
+      providerCallId: "provider-dedupe",
+      provider: "plivo",
+      direction: "outbound",
+      state: "answered",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-dedupe", "call-dedupe");
+
+    processEvent(ctx, {
+      id: "evt-1",
+      dedupeKey: "stable-key-1",
+      type: "call.speech",
+      callId: "call-dedupe",
+      providerCallId: "provider-dedupe",
+      timestamp: now + 1,
+      transcript: "hello",
+      isFinal: true,
+    });
+
+    processEvent(ctx, {
+      id: "evt-2",
+      dedupeKey: "stable-key-1",
+      type: "call.speech",
+      callId: "call-dedupe",
+      providerCallId: "provider-dedupe",
+      timestamp: now + 2,
+      transcript: "hello",
+      isFinal: true,
+    });
+
+    const call = ctx.activeCalls.get("call-dedupe");
+    if (!call) {
+      throw new Error("expected deduped call to remain active");
+    }
+    expect(call.transcript).toHaveLength(1);
+    expect(Array.from(ctx.processedEventIds)).toEqual(["stable-key-1"]);
   });
 });
