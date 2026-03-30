@@ -1,4 +1,5 @@
 import type { TelegramInlineButtons } from "@openclaw/telegram/api.js";
+import { editMessageTelegram } from "@openclaw/telegram/runtime-api.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -266,8 +267,22 @@ export const handleMyOrdersCommand: CommandHandler = async (params, allowTextCom
     return { shouldContinue: false, reply: { text: `Hyperliquid error: ${error}` } };
   }
 
-  return {
-    shouldContinue: false,
-    reply: buildOrdersReply(orders, state, channel, editMessageId, unifiedAccountValue),
-  };
+  const reply = buildOrdersReply(orders, state, channel, editMessageId, unifiedAccountValue);
+
+  // Edit loading message in-place for Telegram button refreshes
+  const chatId = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
+  if (editMessageId && channel === "telegram" && chatId) {
+    const buttons = (reply.channelData?.telegram as { buttons?: TelegramInlineButtons })?.buttons;
+    try {
+      await editMessageTelegram(chatId, editMessageId, reply.text ?? "", {
+        cfg: params.cfg,
+        buttons,
+      });
+      return { shouldContinue: false };
+    } catch {
+      // Edit failed — fall back to new message
+    }
+  }
+
+  return { shouldContinue: false, reply };
 };

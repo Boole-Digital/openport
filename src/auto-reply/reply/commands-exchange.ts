@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { TelegramInlineButtons } from "@openclaw/telegram/api.js";
+import { editMessageTelegram } from "@openclaw/telegram/runtime-api.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -459,27 +460,10 @@ function buildPredictionOrdersText(results: PredictionOrderResult[]): string {
 
 // --- Reply helpers ---
 
-function telegramChannelData(
-  buttons?: TelegramInlineButtons,
-  editMessageId?: string,
-): Record<string, unknown> {
-  return {
-    telegram: {
-      ...(buttons ? { buttons } : {}),
-      ...(editMessageId ? { editMessageId } : {}),
-    },
-  };
-}
-
-function buildReply(
-  text: string,
-  command: string,
-  channel: string,
-  editMessageId?: string,
-): ReplyPayload {
+function buildReply(text: string, command: string, channel: string): ReplyPayload {
   if (channel === "telegram") {
     const buttons: TelegramInlineButtons = [[{ text: "⟳  Refresh", callback_data: command }]];
-    return { text, channelData: telegramChannelData(buttons, editMessageId) };
+    return { text, channelData: { telegram: { buttons } } };
   }
   return { text };
 }
@@ -549,49 +533,61 @@ export const handleExchangeCommand: CommandHandler = async (params, allowTextCom
     }
   }
 
+  // Fetch data based on command type
+  let replyPayload: ReplyPayload;
   if (isOrders) {
     const { results, error } = await fetchData<OrderResult>(v3Dir, "orders", PERP_EXCHANGES);
     if (error) {
-      return { shouldContinue: false, reply: { text: error } };
+      replyPayload = { text: error };
+    } else {
+      replyPayload = buildReply(buildOrdersText(results), label, channel);
     }
-    return {
-      shouldContinue: false,
-      reply: buildReply(buildOrdersText(results), label, channel, editMessageId),
-    };
-  }
-
-  if (isPredictionPositions) {
+  } else if (isPredictionPositions) {
     const { results, error } = await fetchData<StateResult>(v3Dir, "state", PREDICTION_EXCHANGES);
     if (error) {
-      return { shouldContinue: false, reply: { text: error } };
+      replyPayload = { text: error };
+    } else {
+      replyPayload = buildReply(buildPredictionPositionsText(results), label, channel);
     }
-    return {
-      shouldContinue: false,
-      reply: buildReply(buildPredictionPositionsText(results), label, channel, editMessageId),
-    };
-  }
-
-  if (isPredictionOrders) {
+  } else if (isPredictionOrders) {
     const { results, error } = await fetchData<PredictionOrderResult>(
       v3Dir,
       "prediction-orders",
       PREDICTION_EXCHANGES,
     );
     if (error) {
-      return { shouldContinue: false, reply: { text: error } };
+      replyPayload = { text: error };
+    } else {
+      replyPayload = buildReply(buildPredictionOrdersText(results), label, channel);
     }
-    return {
-      shouldContinue: false,
-      reply: buildReply(buildPredictionOrdersText(results), label, channel, editMessageId),
-    };
+  } else {
+    // /mybalances or /mypositions — fetch state
+    const exchanges = isBalances ? ALL_EXCHANGES : PERP_EXCHANGES;
+    const { results, error } = await fetchData<StateResult>(v3Dir, "state", exchanges);
+    if (error) {
+      replyPayload = { text: error };
+    } else {
+      const text = isBalances ? buildBalancesText(results) : buildPositionsText(results);
+      replyPayload = buildReply(text, label, channel);
+    }
   }
 
-  // /mybalances or /mypositions — fetch state
-  const exchanges = isBalances ? ALL_EXCHANGES : PERP_EXCHANGES;
-  const { results, error } = await fetchData<StateResult>(v3Dir, "state", exchanges);
-  if (error) {
-    return { shouldContinue: false, reply: { text: error } };
+  // If we have a loading message to edit, edit it directly via Telegram API
+  const chatId = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
+  if (editMessageId && channel === "telegram" && chatId) {
+    const buttons = (replyPayload.channelData?.telegram as { buttons?: TelegramInlineButtons })
+      ?.buttons;
+    try {
+      await editMessageTelegram(chatId, editMessageId, replyPayload.text ?? "", {
+        cfg: params.cfg,
+        buttons,
+      });
+    } catch {
+      // Edit failed (message deleted, too old, etc.) — fall back to new message
+      return { shouldContinue: false, reply: replyPayload };
+    }
+    return { shouldContinue: false };
   }
-  const text = isBalances ? buildBalancesText(results) : buildPositionsText(results);
-  return { shouldContinue: false, reply: buildReply(text, label, channel, editMessageId) };
+
+  return { shouldContinue: false, reply: replyPayload };
 };
