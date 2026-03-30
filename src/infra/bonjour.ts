@@ -26,6 +26,11 @@ export type GatewayBonjourAdvertiseOpts = {
 };
 
 function isDisabledByEnv() {
+  // Bonjour/mDNS is disabled by default on server deployments (Portara agent boxes).
+  // Set OPENCLAW_ENABLE_BONJOUR=1 to explicitly opt in.
+  if (!isTruthyEnvValue(process.env.OPENCLAW_ENABLE_BONJOUR)) {
+    return true;
+  }
   if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR)) {
     return true;
   }

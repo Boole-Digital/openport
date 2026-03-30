@@ -24,6 +24,7 @@ export async function startGatewayDiscovery(params: {
   // mDNS can be disabled via config (mdnsMode: off) or env var.
   const bonjourEnabled =
     mdnsMode !== "off" &&
+    process.env.OPENCLAW_ENABLE_BONJOUR === "1" &&
     process.env.OPENCLAW_DISABLE_BONJOUR !== "1" &&
     process.env.NODE_ENV !== "test" &&
     !process.env.VITEST;
