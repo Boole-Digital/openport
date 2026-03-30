@@ -153,7 +153,9 @@ export const handleUpdatePortaraCommand: CommandHandler = async (params, allowTe
     }
   };
 
-  await sendStatus("\u23F3 Updating your agent \u2014 this may take a few minutes");
+  await sendStatus(
+    "\u23F3 Updating your agent \u2014 this takes a few minutes. You'll receive a message when it's done.",
+  );
 
   // Step 1: Update trading tools (portara-agent)
   const agentResult = await updatePortaraAgent();
@@ -178,7 +180,7 @@ export const handleUpdatePortaraCommand: CommandHandler = async (params, allowTe
   spawnGatewayRestart();
 
   const reply: ReplyPayload = {
-    text: "\u2705 Agent updated. Restarting \u2014 back in ~30s.",
+    text: "\u2705 Agent updated successfully.",
   };
   return { shouldContinue: false, reply };
 };
