@@ -208,6 +208,7 @@ export async function buildTelegramInboundContextPayload(params: {
     Surface: "telegram",
     BotUsername: primaryCtx.me?.username ?? undefined,
     MessageSid: options?.messageIdOverride ?? String(msg.message_id),
+    TelegramEditMessageId: options?.telegramEditMessageId,
     ReplyToId: replyTarget?.id,
     ReplyToBody: replyTarget?.body,
     ReplyToSender: replyTarget?.sender,

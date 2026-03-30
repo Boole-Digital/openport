@@ -19,6 +19,7 @@ export type TelegramMessageContextOptions = {
   commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
+  telegramEditMessageId?: string;
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
 };
