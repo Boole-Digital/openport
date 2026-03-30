@@ -2745,6 +2745,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   suppressToolErrorWarnings: {
                     type: "boolean",
                   },
+                  pm2Monitor: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                      },
+                      logLines: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      errorPatterns: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                      idleHours: {
+                        type: "number",
+                        minimum: 0,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   lightContext: {
                     type: "boolean",
                   },
@@ -3898,6 +3922,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     suppressToolErrorWarnings: {
                       type: "boolean",
+                    },
+                    pm2Monitor: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        logLines: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        errorPatterns: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        idleHours: {
+                          type: "number",
+                          minimum: 0,
+                        },
+                      },
+                      additionalProperties: false,
                     },
                     lightContext: {
                       type: "boolean",
