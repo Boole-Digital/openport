@@ -78,8 +78,7 @@ set -e
 cd "${OPENPORT_DIR}"
 git fetch origin main 2>&1
 git reset --hard origin/main 2>&1
-# Clean native binaries that may be stale/wrong-platform; keep JS cache for speed
-find node_modules -name '*.node' -delete 2>/dev/null || true
+rm -rf node_modules 2>&1
 pnpm install 2>&1
 pnpm build 2>&1
 # Run post-update script from freshly pulled repo (if it exists)
