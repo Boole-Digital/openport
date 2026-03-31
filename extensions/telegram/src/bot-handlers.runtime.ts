@@ -1573,10 +1573,9 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      // Replace message with loading indicator so buttons appear consumed.
-      // Navigation commands (select, back) overwrite this immediately via
-      // editOrReturn; action commands (work, start, stop) keep it until done.
-      await editCallbackMessage("\u23F3").catch(() => {});
+      // Remove buttons so they appear consumed. Navigation commands (select,
+      // back) will replace the message with new buttons via editOrReturn.
+      await clearCallbackButtons().catch(() => {});
 
       const nativeCommandText = parseTelegramNativeCommandCallbackData(data);
       const syntheticMessage = buildSyntheticTextMessage({
