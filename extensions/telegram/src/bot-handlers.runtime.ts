@@ -1091,12 +1091,6 @@ export const registerTelegramHandlers = ({
       botUsername: ctx.me?.username,
     });
   };
-  // Server-side guard against double-click re-triggers on inline buttons.
-  // Keyed by chatId:messageId:callbackData — different buttons on the same message
-  // still work (e.g. select → details → back), but the same button twice is blocked.
-  const handledCallbacks = new Map<string, number>();
-  const CALLBACK_DEDUP_TTL_MS = 5_000;
-
   bot.on("callback_query", async (ctx) => {
     const callback = ctx.callbackQuery;
     if (!callback) {
@@ -1104,22 +1098,6 @@ export const registerTelegramHandlers = ({
     }
     if (shouldSkipUpdate(ctx)) {
       return;
-    }
-    const cbMsg = callback.message;
-    const cbData = (callback.data ?? "").trim();
-    if (cbMsg && cbData) {
-      const dedupKey = `${cbMsg.chat.id}:${cbMsg.message_id}:${cbData}`;
-      const now = Date.now();
-      if (handledCallbacks.has(dedupKey)) {
-        return;
-      }
-      handledCallbacks.set(dedupKey, now);
-      // Prune stale entries to avoid unbounded growth
-      if (handledCallbacks.size > 50) {
-        for (const [k, ts] of handledCallbacks) {
-          if (now - ts > CALLBACK_DEDUP_TTL_MS) handledCallbacks.delete(k);
-        }
-      }
     }
     const answerCallbackQuery = () =>
       typeof ctx.answerCallbackQuery === "function"
@@ -1572,11 +1550,6 @@ export const registerTelegramHandlers = ({
 
         return;
       }
-
-      // Replace buttons with a loading indicator so the user sees the click
-      // was received. The command response will overwrite this message via
-      // editOrReturn (navigation) or the agent reply (action commands).
-      await editCallbackMessage("\u23F3").catch(() => {});
 
       const nativeCommandText = parseTelegramNativeCommandCallbackData(data);
       const syntheticMessage = buildSyntheticTextMessage({

@@ -417,22 +417,14 @@ async function buildLogsReply(
   maxLines: number,
   editMessageId?: string,
 ): Promise<ReplyPayload> {
-  const backButton: TelegramInlineButtons = [
-    [{ text: "‹  All Strategies", callback_data: "/mystrategies" }],
-  ];
-  const errorReply = (text: string): ReplyPayload =>
-    editMessageId
-      ? { text, channelData: telegramChannelData(backButton, editMessageId) }
-      : { text };
-
   const { processes, error } = await fetchProcesses();
   if (error) {
-    return errorReply(error);
+    return { text: error };
   }
 
   const proc = resolveProcess(processes, name);
   if (!proc) {
-    return errorReply(`Strategy "${name}" has no logs — not started.`);
+    return { text: `Strategy "${name}" has no logs — not started.` };
   }
 
   const outPath = proc.pm2_env.pm_out_log_path;
@@ -467,10 +459,7 @@ async function buildLogsReply(
   }
 
   if (editMessageId) {
-    const backButton: TelegramInlineButtons = [
-      [{ text: "‹  All Strategies", callback_data: "/mystrategies" }],
-    ];
-    return { text, channelData: telegramChannelData(backButton, editMessageId) };
+    return { text, channelData: telegramChannelData(undefined, editMessageId) };
   }
   return { text };
 }
@@ -484,14 +473,6 @@ async function controlStrategy(
   const { processes } = await fetchProcesses();
   const proc = resolveProcess(processes, stem);
 
-  const backButton: TelegramInlineButtons = [
-    [{ text: "‹  All Strategies", callback_data: "/mystrategies" }],
-  ];
-  const errorReply = (text: string): ReplyPayload =>
-    editMessageId
-      ? { text, channelData: telegramChannelData(backButton, editMessageId) }
-      : { text };
-
   // First-time start: pm2 doesn't know this strategy yet
   if (!proc && action === "start") {
     const filePath = join(STRATEGIES_DIR, `${stem}.js`);
@@ -503,15 +484,15 @@ async function controlStrategy(
     } catch (err) {
       const error = err as NodeJS.ErrnoException;
       if (error.code === "ENOENT") {
-        return errorReply("PM2 is not installed or not in PATH.");
+        return { text: "PM2 is not installed or not in PATH." };
       }
-      return errorReply(`Failed to start "${stem}": ${error.message}`);
+      return { text: `Failed to start "${stem}": ${error.message}` };
     }
     return buildSelectReply(stem, channel, editMessageId);
   }
 
   if (!proc) {
-    return errorReply(`Strategy "${stem}" is not started — cannot ${action}.`);
+    return { text: `Strategy "${stem}" is not started — cannot ${action}.` };
   }
 
   try {
@@ -519,9 +500,9 @@ async function controlStrategy(
   } catch (err) {
     const error = err as NodeJS.ErrnoException;
     if (error.code === "ENOENT") {
-      return errorReply("PM2 is not installed or not in PATH.");
+      return { text: "PM2 is not installed or not in PATH." };
     }
-    return errorReply(`Failed to ${action} "${stem}": ${error.message}`);
+    return { text: `Failed to ${action} "${stem}": ${error.message}` };
   }
 
   return buildSelectReply(stem, channel, editMessageId);
@@ -623,15 +604,6 @@ export const handleMyStrategiesCommand: CommandHandler = async (params, allowTex
   if (workMatch) {
     const stem = workMatch[1].trim();
     const filePath = join(STRATEGIES_DIR, `${stem}.js`);
-    // Clear the loading indicator — the agent reply will be a new message.
-    if (editMessageId && channel === "telegram" && chatId) {
-      try {
-        const { editMessageTelegram } = await import("@openclaw/telegram/runtime-api.js");
-        await editMessageTelegram(chatId, editMessageId, `✏️ Working on **${stem}**…`, {
-          cfg: params.cfg,
-        });
-      } catch {}
-    }
     return {
       shouldContinue: true,
       agentMessageOverride: `Please work on my "${stem}" strategy. The strategy file is at: ${filePath}`,
