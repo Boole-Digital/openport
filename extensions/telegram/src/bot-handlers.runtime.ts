@@ -1551,6 +1551,9 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      // Clear buttons immediately to prevent double-click re-triggers
+      await clearCallbackButtons().catch(() => {});
+
       const nativeCommandText = parseTelegramNativeCommandCallbackData(data);
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
