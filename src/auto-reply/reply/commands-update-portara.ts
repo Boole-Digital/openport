@@ -97,11 +97,14 @@ function spawnGatewayRestart(): void {
     [
       "-c",
       `
+if [ -x /tmp/openclaw-restart.sh ]; then
+  exec /tmp/openclaw-restart.sh
+fi
 sleep 1
 cd "${OPENPORT_DIR}"
-openclaw gateway stop 2>&1 || true
+node openclaw.mjs gateway stop 2>&1 || true
 sleep 2
-openclaw gateway start --force > /tmp/openclaw-restart.log 2>&1
+node openclaw.mjs gateway start --force > /tmp/openclaw-restart.log 2>&1
 `,
     ],
     {

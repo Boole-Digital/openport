@@ -68,4 +68,19 @@ if (fs.existsSync(agentsFile)) {
   }
 }
 
+// --- Write restart script that uses the local fork binary ---
+// spawnGatewayRestart() in old running code may still reference the global
+// `openclaw` binary. This writes a restart script using the local entry point
+// so that the next gateway restart always uses the freshly built fork.
+const OPENPORT_DIR = path.join(HOME, "openport");
+const restartScript = `#!/bin/bash
+sleep 1
+cd "${OPENPORT_DIR}"
+node openclaw.mjs gateway stop 2>&1 || true
+sleep 2
+node openclaw.mjs gateway start --force > /tmp/openclaw-restart.log 2>&1
+`;
+fs.writeFileSync("/tmp/openclaw-restart.sh", restartScript, { mode: 0o755 });
+console.log("[post-update] restart script written to /tmp/openclaw-restart.sh");
+
 console.log("[post-update] openport post-update complete");
