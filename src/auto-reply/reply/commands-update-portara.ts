@@ -22,6 +22,7 @@ async function runScript(
     const { stdout, stderr } = await execAsync(script, {
       shell: "/bin/bash",
       timeout: timeoutMs,
+      maxBuffer: 50 * 1024 * 1024,
       env: { ...process.env, HOME: homedir() },
     });
     const output = (stdout + (stderr ? `\n${stderr}` : "")).trim();
