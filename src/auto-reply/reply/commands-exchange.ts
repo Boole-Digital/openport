@@ -143,7 +143,7 @@ const ti = new TradingInterface();
 const EXCHANGES = ${exchangesJson};
 
 const results = await Promise.all(EXCHANGES.map(async ({ id, label }) => {
-  if (!config[id]?.privateKey) {
+  if (!config[id]?.privateKey && !config[id]?.privy) {
     return { id, label, configured: false };
   }
   try {
